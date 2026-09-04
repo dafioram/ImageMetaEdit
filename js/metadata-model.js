@@ -1,0 +1,197 @@
+/* Per-file state. Each FileRecord tracks the original bytes, the parsed
+   metadata (both a "strict" numeric-coded version used to prefill editable
+   fields, and a "pretty" translated version used for the raw dump tab),
+   the current editable field values, and enough bookkeeping to diff against
+   the original and produce output bytes on demand. */
+(function (Datum) {
+  "use strict";
+
+  let idCounter = 0;
+
+  const EXIFR_BASE = {
+    tiff: true, ifd0: true, ifd1: false, exif: true, gps: true, interop: false,
+    iptc: false, xmp: false, icc: false, jfif: false, makerNote: false, userComment: false,
+    ihdr: true, sanitize: true, mergeOutput: true, silentErrors: true,
+    reviveValues: true, translateKeys: true,
+  };
+  const EXIFR_OPTS_STRICT = Object.assign({}, EXIFR_BASE, { translateValues: false });
+  const EXIFR_OPTS_PRETTY = Object.assign({}, EXIFR_BASE, { translateValues: true });
+
+  function detectKind(file) {
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    if (type === "image/jpeg" || type === "image/jpg" || /\.(jpe?g)$/.test(name)) return "jpeg";
+    if (type === "image/png" || /\.png$/.test(name)) return "png";
+    if (type === "image/heic" || type === "image/heif" || /\.(heic|heif)$/.test(name)) return "heic";
+    return "other";
+  }
+
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const round6 = (n) => Math.round(n * 1e6) / 1e6;
+
+  function fieldsFromParsed(parsed) {
+    parsed = parsed || {};
+    const fields = {};
+    fields.make = parsed.Make || "";
+    fields.model = parsed.Model || "";
+    fields.lens = parsed.LensModel || "";
+    fields.fNumber = (typeof parsed.FNumber === "number") ? round2(parsed.FNumber) : "";
+    fields.exposureTime = (typeof parsed.ExposureTime === "number") ? Datum.fieldCodec.formatExposureTime(parsed.ExposureTime) : "";
+    fields.iso = (parsed.ISO !== undefined && parsed.ISO !== null) ? parsed.ISO : "";
+    fields.focalLength = (typeof parsed.FocalLength === "number") ? round2(parsed.FocalLength) : "";
+    fields.description = parsed.ImageDescription || "";
+    fields.artist = parsed.Artist || "";
+    fields.copyright = parsed.Copyright || "";
+    fields.orientation = (parsed.Orientation !== undefined && parsed.Orientation !== null) ? Number(parsed.Orientation) : 1;
+
+    const dateSrc = parsed.DateTimeOriginal || parsed.CreateDate || parsed.ModifyDate;
+    fields.dateTaken = dateSrc ? Datum.fieldCodec.exifDateToInput(dateSrc) : "";
+
+    if (typeof parsed.latitude === "number" && typeof parsed.longitude === "number") {
+      fields.latitude = round6(parsed.latitude);
+      fields.longitude = round6(parsed.longitude);
+      let altRef = 0;
+      if (parsed.GPSAltitudeRef !== undefined && parsed.GPSAltitudeRef !== null) {
+        altRef = (typeof parsed.GPSAltitudeRef.length === "number") ? parsed.GPSAltitudeRef[0] : parsed.GPSAltitudeRef;
+      }
+      fields.altitude = (typeof parsed.GPSAltitude === "number") ? round2(altRef === 1 ? -parsed.GPSAltitude : parsed.GPSAltitude) : "";
+    } else {
+      fields.latitude = "";
+      fields.longitude = "";
+      fields.altitude = "";
+    }
+    return fields;
+  }
+
+  function loadDims(record, file) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        record.dims.width = img.naturalWidth;
+        record.dims.height = img.naturalHeight;
+        URL.revokeObjectURL(img.src);
+        resolve();
+      };
+      img.onerror = () => resolve();
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  async function createFileRecord(file) {
+    const id = "f" + (++idCounter) + "_" + Date.now().toString(36);
+    const kind = detectKind(file);
+    const bytes = await Datum.bin.fileToUint8Array(file);
+
+    const record = {
+      id, file, kind, bytes,
+      heicJpegBytes: null,
+      previewUrl: null,
+      rawMetaPretty: {},
+      fields: {},
+      originalFields: {},
+      outputName: file.name,
+      supportsEdit: kind === "jpeg" || kind === "png" || kind === "heic",
+      stripRequested: false,
+      error: null,
+      notice: null,
+      dims: { width: null, height: null },
+    };
+
+    try {
+      if (kind === "heic") {
+        record.notice = "HEIC files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg.";
+        const canvas = await Datum.heic.decodeToCanvas(bytes);
+        record.dims.width = canvas.width;
+        record.dims.height = canvas.height;
+        record.heicJpegBytes = await Datum.heic.canvasToJpegBytes(canvas, 0.92);
+        record.previewUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const base = file.name.replace(/\.(heic|heif)$/i, "");
+        record.outputName = (base || "photo") + ".jpg";
+
+        // HEIC metadata goes through our own box reader + piexif rather
+        // than exifr -- see heic-box-reader.js for why.
+        const tiffBytes = Datum.heicBoxReader.extractExifTiff(bytes);
+        if (tiffBytes) {
+          const exifObj = Datum.metadataWriter.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiffBytes));
+          record.fields = Datum.metadataWriter.fieldsFromExifObj(exifObj);
+          record.rawMetaPretty = Datum.metadataWriter.rawDumpFromExifObj(exifObj);
+        } else {
+          record.fields = fieldsFromParsed(null);
+          record.rawMetaPretty = {};
+        }
+      } else if (kind === "jpeg" || kind === "png") {
+        record.previewUrl = URL.createObjectURL(file);
+        const [strict, pretty] = await Promise.all([
+          window.exifr.parse(bytes, EXIFR_OPTS_STRICT).catch(() => null),
+          window.exifr.parse(bytes, EXIFR_OPTS_PRETTY).catch(() => null),
+        ]);
+        record.rawMetaPretty = pretty || {};
+        record.fields = fieldsFromParsed(strict);
+        await loadDims(record, file);
+      } else {
+        record.previewUrl = URL.createObjectURL(file);
+        record.notice = "This format isn't supported for metadata editing here. Showing basic file info only \u2014 it will pass through to the download unchanged.";
+        await loadDims(record, file);
+      }
+    } catch (e) {
+      record.error = "Could not read this file: " + (e && e.message ? e.message : String(e));
+      record.supportsEdit = false;
+    }
+
+    record.originalFields = Object.assign({}, record.fields);
+    return record;
+  }
+
+  function normalizeForDiff(key, v) {
+    if (v === undefined || v === null || v === "") {
+      // Orientation's "no tag" state is conventionally treated as Normal (1)
+      // by viewers, and the dropdown displays it that way too -- so an
+      // empty value here should count as "1", not as a change from it.
+      return key === "orientation" ? "1" : "";
+    }
+    return String(v);
+  }
+
+  function changedKeys(record) {
+    const keys = [];
+    const all = new Set([...Object.keys(record.fields), ...Object.keys(record.originalFields)]);
+    for (const k of all) {
+      const an = normalizeForDiff(k, record.fields[k]);
+      const bn = normalizeForDiff(k, record.originalFields[k]);
+      if (an !== bn) keys.push(k);
+    }
+    return keys;
+  }
+
+  function resetAll(record) {
+    record.fields = Object.assign({}, record.originalFields);
+    record.stripRequested = false;
+  }
+
+  function stripAll(record) {
+    const cleared = {};
+    for (const k of Object.keys(record.fields)) cleared[k] = "";
+    record.fields = cleared;
+    record.stripRequested = true;
+  }
+
+  function getOutputBytes(record) {
+    if (!record.supportsEdit) return record.bytes;
+    if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested);
+    if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested);
+    if (record.kind === "heic") return Datum.metadataWriter.writeJpeg(record.heicJpegBytes, record.fields, !!record.stripRequested);
+    return record.bytes;
+  }
+
+  function getOutputMime(record) {
+    if (record.kind === "jpeg" || record.kind === "heic") return "image/jpeg";
+    if (record.kind === "png") return "image/png";
+    return record.file.type || "application/octet-stream";
+  }
+
+  Datum.model = {
+    detectKind, createFileRecord, changedKeys, resetAll, stripAll,
+    getOutputBytes, getOutputMime, fieldsFromParsed,
+    EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
+  };
+})(window.Datum = window.Datum || {});

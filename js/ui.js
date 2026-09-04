@@ -1,0 +1,612 @@
+/* All DOM building lives here. Full re-renders happen only on file
+   add/remove/select or a bulk action; individual keystrokes in a field
+   update the model directly and patch just the affected DOM bits (changed
+   dots, diff counter, queue status) so focus/cursor position is never
+   lost. File-derived text (filenames, EXIF string values) is always set
+   via .textContent or the .value property -- never innerHTML -- since
+   EXIF fields can contain attacker-controlled strings. */
+(function (Datum) {
+  "use strict";
+
+  let toastTimer = null;
+
+  function showToast(message) {
+    let el = document.getElementById("toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast";
+      el.className = "toast";
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  function makeButton(text, className, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = className;
+    b.textContent = text;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  function factSpan(label, value) {
+    const span = document.createElement("span");
+    span.appendChild(document.createTextNode(label + ": "));
+    const b = document.createElement("b");
+    b.textContent = value;
+    span.appendChild(b);
+    return span;
+  }
+
+  function formatBytes(n) {
+    if (n === null || n === undefined) return "\u2014";
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0, v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? v : v.toFixed(1)) + " " + units[i];
+  }
+
+  function statusTextFor(record) {
+    if (record.error) return "Couldn't read file";
+    if (!record.supportsEdit) return "View only";
+    const n = Datum.model.changedKeys(record).length;
+    return n > 0 ? (n + (n === 1 ? " change" : " changes")) : "No changes";
+  }
+
+  function formatRawValue(v) {
+    if (v === null || v === undefined) return "\u2014";
+    if (v instanceof Date) return isNaN(v.getTime()) ? "\u2014" : v.toLocaleString();
+    if (ArrayBuffer.isView(v)) return "[binary data, " + v.length + " bytes]";
+    if (Array.isArray(v)) return v.map(formatRawValue).join(", ");
+    if (typeof v === "object") { try { return JSON.stringify(v); } catch (e) { return "[object]"; } }
+    let s = String(v);
+    if (s.length > 300) s = s.slice(0, 300) + "\u2026";
+    return s;
+  }
+
+  // ---------- Dropzone (empty state) ----------
+
+  function dropzoneMarkup() {
+    return (
+      '<div class="dropzone" id="dropzone">' +
+      '<span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>' +
+      "<h2>Drop a photo here</h2>" +
+      "<p>See its metadata, edit GPS and camera details, then download \u2014 nothing leaves your browser.</p>" +
+      '<label class="btn btn-primary" for="file-input">Choose files</label>' +
+      '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" multiple />' +
+      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC: preview + convert to edit &middot; other formats: view only</div>' +
+      "</div>"
+    );
+  }
+
+  function wireDropzone() {
+    const dz = document.getElementById("dropzone");
+    const input = document.getElementById("file-input");
+    input.addEventListener("change", () => { if (input.files.length) Datum.app.addFiles(input.files); });
+    ["dragenter", "dragover"].forEach((evt) => dz.addEventListener(evt, (e) => { e.preventDefault(); dz.classList.add("drag-over"); }));
+    ["dragleave", "drop"].forEach((evt) => dz.addEventListener(evt, (e) => { e.preventDefault(); dz.classList.remove("drag-over"); }));
+    dz.addEventListener("drop", (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) Datum.app.addFiles(e.dataTransfer.files);
+    });
+  }
+
+  // ---------- Queue rail ----------
+
+  function buildQueueItem(record, state) {
+    const li = document.createElement("li");
+    const item = document.createElement("div");
+    item.className = "queue-item" + (record.id === state.activeId ? " active" : "");
+    item.setAttribute("data-id", record.id);
+    item.setAttribute("role", "button");
+    item.setAttribute("tabindex", "0");
+
+    const thumb = document.createElement("img");
+    thumb.className = "thumb";
+    thumb.alt = "";
+    if (record.previewUrl) thumb.src = record.previewUrl;
+    item.appendChild(thumb);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const nameDiv = document.createElement("div");
+    nameDiv.className = "name";
+    nameDiv.textContent = record.outputName || record.file.name;
+    const statusDiv = document.createElement("div");
+    statusDiv.className = "status" + (Datum.model.changedKeys(record).length > 0 ? " changed" : "");
+    statusDiv.textContent = statusTextFor(record);
+    meta.appendChild(nameDiv);
+    meta.appendChild(statusDiv);
+    item.appendChild(meta);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "remove-x";
+    removeBtn.setAttribute("aria-label", "Remove file");
+    removeBtn.textContent = "\u00D7";
+    removeBtn.addEventListener("click", (e) => { e.stopPropagation(); Datum.app.removeFile(record.id); });
+    item.appendChild(removeBtn);
+
+    item.addEventListener("click", () => Datum.app.selectFile(record.id));
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); Datum.app.selectFile(record.id); }
+    });
+
+    li.appendChild(item);
+    return li;
+  }
+
+  function renderQueue(state) {
+    const panel = document.getElementById("queue-panel");
+    panel.innerHTML = "";
+
+    const h3 = document.createElement("h3");
+    h3.textContent = "Files (" + state.records.length + ")";
+    panel.appendChild(h3);
+
+    const ul = document.createElement("ul");
+    ul.className = "queue-list";
+    for (const record of state.records) ul.appendChild(buildQueueItem(record, state));
+    panel.appendChild(ul);
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+
+    const addLabel = document.createElement("label");
+    addLabel.className = "add-more-label btn btn-ghost";
+    addLabel.setAttribute("for", "file-input-more");
+    addLabel.appendChild(document.createTextNode("+ Add more files"));
+    const addInput = document.createElement("input");
+    addInput.type = "file";
+    addInput.id = "file-input-more";
+    addInput.multiple = true;
+    addInput.accept = "image/jpeg,image/png,image/heic,image/heif,.heic,.heif";
+    addInput.addEventListener("change", () => { if (addInput.files.length) Datum.app.addFiles(addInput.files); });
+    addLabel.appendChild(addInput);
+    actions.appendChild(addLabel);
+
+    if (state.records.length > 1) {
+      actions.appendChild(makeButton("Apply this location to all", "btn btn-sm", () => Datum.app.applyGpsToAll()));
+      actions.appendChild(makeButton("Strip all metadata (every file)", "btn btn-sm btn-danger", () => Datum.app.stripAllFiles()));
+      actions.appendChild(makeButton("Download all as .zip", "btn btn-primary", () => Datum.app.downloadAllZip()));
+    }
+    panel.appendChild(actions);
+  }
+
+  // ---------- Editor: common fields ----------
+
+  function refreshChangedIndicators(record) {
+    const changed = new Set(Datum.model.changedKeys(record));
+    document.querySelectorAll(".field[data-key]").forEach((fieldEl) => {
+      const key = fieldEl.getAttribute("data-key");
+      fieldEl.classList.toggle("is-changed", changed.has(key));
+    });
+    const diffCountEl = document.getElementById("diff-count");
+    if (diffCountEl) updateDiffCountEl(diffCountEl, record);
+    updateQueueItemStatus(record);
+  }
+
+  function updateDiffCountEl(el, record) {
+    const n = Datum.model.changedKeys(record).length;
+    el.innerHTML = "";
+    if (n === 0) { el.textContent = "No changes yet"; return; }
+    const b = document.createElement("b");
+    b.textContent = String(n);
+    el.appendChild(b);
+    el.appendChild(document.createTextNode(n === 1 ? " field changed" : " fields changed"));
+  }
+
+  function updateQueueItemName(record) {
+    const item = document.querySelector('.queue-item[data-id="' + record.id + '"]');
+    if (!item) return;
+    const nameDiv = item.querySelector(".name");
+    if (nameDiv) nameDiv.textContent = record.outputName;
+  }
+
+  function updateQueueItemStatus(record) {
+    const item = document.querySelector('.queue-item[data-id="' + record.id + '"]');
+    if (!item) return;
+    const statusDiv = item.querySelector(".status");
+    if (!statusDiv) return;
+    statusDiv.textContent = statusTextFor(record);
+    statusDiv.classList.toggle("changed", Datum.model.changedKeys(record).length > 0);
+  }
+
+  function buildFieldEl(def, record) {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    wrap.dataset.key = def.key;
+
+    const label = document.createElement("label");
+    label.appendChild(document.createTextNode(def.label + " "));
+    const dot = document.createElement("span");
+    dot.className = "changed-dot";
+    label.appendChild(dot);
+    wrap.appendChild(label);
+
+    let input;
+    if (def.type === "orientation") {
+      input = document.createElement("select");
+      for (const opt of Datum.ORIENTATION_OPTIONS) {
+        const o = document.createElement("option");
+        o.value = String(opt.value);
+        o.textContent = opt.label;
+        input.appendChild(o);
+      }
+      input.value = String(record.fields[def.key] === undefined || record.fields[def.key] === "" ? 1 : record.fields[def.key]);
+    } else if (def.key === "dateTaken") {
+      input = document.createElement("input");
+      input.type = "datetime-local";
+      input.step = "1";
+      input.value = record.fields[def.key] || "";
+    } else if (def.type === "int" || def.type === "rational") {
+      input = document.createElement("input");
+      input.type = "number";
+      input.step = def.type === "rational" ? "0.1" : "1";
+      input.value = (record.fields[def.key] === "" || record.fields[def.key] === undefined) ? "" : record.fields[def.key];
+      if (def.placeholder) input.placeholder = def.placeholder;
+    } else {
+      input = document.createElement("input");
+      input.type = "text";
+      input.value = record.fields[def.key] || "";
+      if (def.placeholder) input.placeholder = def.placeholder;
+    }
+
+    input.addEventListener("input", () => {
+      record.fields[def.key] = input.value;
+      if (input.value !== "") record.stripRequested = false;
+      refreshChangedIndicators(record);
+    });
+    input.addEventListener("change", () => {
+      record.fields[def.key] = input.value;
+      refreshChangedIndicators(record);
+    });
+
+    wrap.appendChild(input);
+    if (def.hint) {
+      const hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = def.hint;
+      wrap.appendChild(hint);
+    }
+    return wrap;
+  }
+
+  function buildCommonFields(container, record) {
+    const schema = Datum.examifSchema();
+    const order = ["camera", "datetime", "description", "technical"];
+    for (const cat of order) {
+      const defs = schema.filter((d) => d.category === cat);
+      if (!defs.length) continue;
+      const group = document.createElement("div");
+      group.className = "field-group";
+      const h4 = document.createElement("h4");
+      h4.textContent = Datum.CATEGORY_LABELS[cat];
+      group.appendChild(h4);
+      const grid = document.createElement("div");
+      grid.className = "field-grid";
+      for (const def of defs) grid.appendChild(buildFieldEl(def, record));
+      group.appendChild(grid);
+      container.appendChild(group);
+    }
+  }
+
+  // ---------- Editor: GPS panel ----------
+
+  function buildGpsNumberField(key, label, record, min, max) {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    wrap.dataset.key = key;
+    const labelEl = document.createElement("label");
+    labelEl.appendChild(document.createTextNode(label + " "));
+    const dot = document.createElement("span");
+    dot.className = "changed-dot";
+    labelEl.appendChild(dot);
+    wrap.appendChild(labelEl);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.min = String(min);
+    input.max = String(max);
+    input.value = (record.fields[key] === "" || record.fields[key] === undefined || record.fields[key] === null) ? "" : record.fields[key];
+
+    input.addEventListener("input", () => {
+      const raw = input.value;
+      record.fields[key] = raw === "" ? "" : parseFloat(raw);
+      if (raw !== "") record.stripRequested = false;
+      if (key === "latitude" || key === "longitude") {
+        const lat = record.fields.latitude, lon = record.fields.longitude;
+        if (lat !== "" && lon !== "" && isFinite(lat) && isFinite(lon)) {
+          Datum.mapWidget.setPosition(lat, lon, { recenter: false });
+        } else {
+          Datum.mapWidget.setPosition(null, null);
+        }
+      }
+      updateGpsReadout(record);
+      refreshChangedIndicators(record);
+    });
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  function updateGpsReadout(record) {
+    const el = document.getElementById("gps-readout");
+    if (!el) return;
+    const lat = record.fields.latitude, lon = record.fields.longitude;
+    if (lat === "" || lon === "" || lat === undefined || lon === undefined || !isFinite(lat) || !isFinite(lon)) {
+      el.textContent = "No location set";
+      return;
+    }
+    el.textContent = Datum.gps.formatDMS(Number(lat), true) + "   \u00B7   " + Datum.gps.formatDMS(Number(lon), false);
+  }
+
+  function setGpsFieldsFromMap(record, lat, lon) {
+    record.fields.latitude = Math.round(lat * 1e6) / 1e6;
+    record.fields.longitude = Math.round(lon * 1e6) / 1e6;
+    record.stripRequested = false;
+    const latInput = document.querySelector('.field[data-key="latitude"] input');
+    const lonInput = document.querySelector('.field[data-key="longitude"] input');
+    if (latInput) latInput.value = record.fields.latitude;
+    if (lonInput) lonInput.value = record.fields.longitude;
+    Datum.mapWidget.setPosition(record.fields.latitude, record.fields.longitude, { recenter: false });
+    updateGpsReadout(record);
+    refreshChangedIndicators(record);
+  }
+
+  function useMyLocation(record) {
+    if (!navigator.geolocation) { showToast("Your browser doesn't support location."); return; }
+    showToast("Requesting your location\u2026");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGpsFieldsFromMap(record, pos.coords.latitude, pos.coords.longitude);
+        Datum.mapWidget.setPosition(record.fields.latitude, record.fields.longitude, { recenter: true, zoom: 13 });
+        showToast("Location set from your device.");
+      },
+      (err) => showToast("Couldn't get your location: " + (err && err.message ? err.message : "permission denied")),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  function clearGps(record) {
+    record.fields.latitude = "";
+    record.fields.longitude = "";
+    record.fields.altitude = "";
+    const latInput = document.querySelector('.field[data-key="latitude"] input');
+    const lonInput = document.querySelector('.field[data-key="longitude"] input');
+    const altInput = document.querySelector('.field[data-key="altitude"] input');
+    if (latInput) latInput.value = "";
+    if (lonInput) lonInput.value = "";
+    if (altInput) altInput.value = "";
+    Datum.mapWidget.setPosition(null, null);
+    updateGpsReadout(record);
+    refreshChangedIndicators(record);
+  }
+
+  function buildGpsPanel(container, record) {
+    const layout = document.createElement("div");
+    layout.className = "gps-layout";
+
+    const left = document.createElement("div");
+    const mapWrap = document.createElement("div");
+    mapWrap.className = "map-wrap";
+    const mapDiv = document.createElement("div");
+    mapDiv.id = "map";
+    mapWrap.appendChild(mapDiv);
+    left.appendChild(mapWrap);
+    const readout = document.createElement("div");
+    readout.className = "gps-readout";
+    readout.id = "gps-readout";
+    left.appendChild(readout);
+    layout.appendChild(left);
+
+    const right = document.createElement("div");
+    const grid = document.createElement("div");
+    grid.className = "field-grid";
+    grid.appendChild(buildGpsNumberField("latitude", "Latitude", record, -90, 90));
+    grid.appendChild(buildGpsNumberField("longitude", "Longitude", record, -180, 180));
+    grid.appendChild(buildGpsNumberField("altitude", "Altitude (meters)", record, -12000, 9000));
+    right.appendChild(grid);
+
+    const actions = document.createElement("div");
+    actions.className = "gps-actions";
+    actions.appendChild(makeButton("Use my current location", "btn btn-sm", () => useMyLocation(record)));
+    actions.appendChild(makeButton("Clear location", "btn btn-sm btn-danger", () => clearGps(record)));
+    right.appendChild(actions);
+
+    layout.appendChild(right);
+    container.appendChild(layout);
+  }
+
+  // ---------- Editor: raw metadata table ----------
+
+  function buildRawTable(container, record) {
+    const entries = Object.entries(record.rawMetaPretty || {}).filter(([k]) => k !== "errors");
+    if (!entries.length) {
+      const p = document.createElement("div");
+      p.className = "empty-note";
+      p.textContent = "No additional metadata found in this file.";
+      container.appendChild(p);
+      return;
+    }
+    entries.sort((a, b) => a[0].localeCompare(b[0]));
+    const wrap = document.createElement("div");
+    wrap.className = "raw-table-wrap";
+    const table = document.createElement("table");
+    table.className = "raw-table";
+    const thead = document.createElement("thead");
+    const trh = document.createElement("tr");
+    const th1 = document.createElement("th"); th1.textContent = "Tag";
+    const th2 = document.createElement("th"); th2.textContent = "Value";
+    trh.appendChild(th1); trh.appendChild(th2);
+    thead.appendChild(trh);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const [key, value] of entries) {
+      const tr = document.createElement("tr");
+      const tdKey = document.createElement("td"); tdKey.className = "key"; tdKey.textContent = key;
+      const tdVal = document.createElement("td"); tdVal.className = "val"; tdVal.textContent = formatRawValue(value);
+      tr.appendChild(tdKey); tr.appendChild(tdVal);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    container.appendChild(wrap);
+  }
+
+  // ---------- Editor shell ----------
+
+  function renderEditor(state) {
+    const panel = document.getElementById("editor-panel");
+    const record = state.records.find((r) => r.id === state.activeId);
+    panel.innerHTML = "";
+    if (!record) return;
+
+    const top = document.createElement("div");
+    top.className = "editor-top";
+
+    const previewFrame = document.createElement("div");
+    previewFrame.className = "preview-frame";
+    if (record.previewUrl) {
+      const img = document.createElement("img");
+      img.src = record.previewUrl;
+      img.alt = "";
+      previewFrame.appendChild(img);
+    } else {
+      const span = document.createElement("div");
+      span.className = "no-preview";
+      span.textContent = "No preview available";
+      previewFrame.appendChild(span);
+    }
+    top.appendChild(previewFrame);
+
+    const summary = document.createElement("div");
+    summary.className = "file-summary";
+    const nameRow = document.createElement("div");
+    nameRow.className = "filename-row";
+    const nameInput = document.createElement("input");
+    nameInput.className = "filename";
+    nameInput.type = "text";
+    nameInput.value = record.outputName;
+    nameInput.setAttribute("aria-label", "Output filename");
+    nameInput.addEventListener("input", () => { record.outputName = nameInput.value; updateQueueItemName(record); });
+    nameRow.appendChild(nameInput);
+    summary.appendChild(nameRow);
+
+    const facts = document.createElement("div");
+    facts.className = "facts";
+    facts.appendChild(factSpan("Type", record.kind.toUpperCase()));
+    facts.appendChild(factSpan("Size", formatBytes(record.file.size)));
+    if (record.dims.width) facts.appendChild(factSpan("Dimensions", record.dims.width + "\u00D7" + record.dims.height));
+    summary.appendChild(facts);
+
+    if (record.notice) {
+      const notice = document.createElement("div");
+      notice.className = "notice";
+      notice.textContent = record.notice;
+      summary.appendChild(notice);
+    }
+    if (record.error) {
+      const notice = document.createElement("div");
+      notice.className = "notice warn";
+      notice.textContent = record.error;
+      summary.appendChild(notice);
+    }
+    top.appendChild(summary);
+    panel.appendChild(top);
+
+    if (!record.supportsEdit) {
+      const footer = document.createElement("div");
+      footer.className = "editor-footer";
+      footer.appendChild(document.createElement("div"));
+      footer.appendChild(makeButton("Download file", "btn btn-primary", () => Datum.batch.downloadSingle(record)));
+      panel.appendChild(footer);
+      return;
+    }
+
+    const tabs = document.createElement("div");
+    tabs.className = "tabs";
+    const tabDefs = [["common", "Common fields"], ["gps", "Location"], ["raw", "All fields"]];
+    const tabButtons = {};
+    for (const [key, label] of tabDefs) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tab-btn" + (key === "common" ? " active" : "");
+      btn.textContent = label;
+      btn.setAttribute("data-tab", key);
+      tabButtons[key] = btn;
+      tabs.appendChild(btn);
+    }
+    panel.appendChild(tabs);
+
+    const commonPanel = document.createElement("div");
+    commonPanel.className = "tab-panel active";
+    buildCommonFields(commonPanel, record);
+
+    const gpsPanel = document.createElement("div");
+    gpsPanel.className = "tab-panel";
+    buildGpsPanel(gpsPanel, record);
+
+    const rawPanel = document.createElement("div");
+    rawPanel.className = "tab-panel";
+    buildRawTable(rawPanel, record);
+
+    panel.appendChild(commonPanel);
+    panel.appendChild(gpsPanel);
+    panel.appendChild(rawPanel);
+
+    const panels = { common: commonPanel, gps: gpsPanel, raw: rawPanel };
+    function switchTab(key) {
+      Object.keys(tabButtons).forEach((k) => tabButtons[k].classList.toggle("active", k === key));
+      Object.keys(panels).forEach((k) => panels[k].classList.toggle("active", k === key));
+      if (key === "gps") Datum.mapWidget.invalidateSize();
+    }
+    for (const [key] of tabDefs) tabButtons[key].addEventListener("click", () => switchTab(key));
+
+    const footer = document.createElement("div");
+    footer.className = "editor-footer";
+    const diffCount = document.createElement("div");
+    diffCount.className = "diff-count";
+    diffCount.id = "diff-count";
+    updateDiffCountEl(diffCount, record);
+    footer.appendChild(diffCount);
+
+    const btnRow = document.createElement("div");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+    btnRow.style.flexWrap = "wrap";
+    btnRow.appendChild(makeButton("Reset changes", "btn btn-ghost", () => { Datum.model.resetAll(record); Datum.ui.render(Datum.app.getState()); }));
+    btnRow.appendChild(makeButton("Strip all metadata", "btn btn-danger", () => { Datum.model.stripAll(record); Datum.ui.render(Datum.app.getState()); }));
+    btnRow.appendChild(makeButton("Download", "btn btn-primary", () => Datum.batch.downloadSingle(record)));
+    footer.appendChild(btnRow);
+    panel.appendChild(footer);
+
+    Datum.mapWidget.init("map");
+    Datum.mapWidget.onClick((lat, lon) => setGpsFieldsFromMap(record, lat, lon));
+    if (record.fields.latitude !== "" && record.fields.longitude !== "" && record.fields.latitude !== undefined) {
+      Datum.mapWidget.setPosition(record.fields.latitude, record.fields.longitude, { recenter: true, zoom: 12 });
+    } else {
+      Datum.mapWidget.setPosition(null, null);
+    }
+    updateGpsReadout(record);
+  }
+
+  // ---------- Top-level render ----------
+
+  function render(state) {
+    const root = document.getElementById("app-root");
+    if (!state.records.length) {
+      root.innerHTML = dropzoneMarkup();
+      wireDropzone();
+      return;
+    }
+    root.innerHTML = '<div class="workspace"><div class="queue-panel" id="queue-panel"></div><div class="editor-panel" id="editor-panel"></div></div>';
+    renderQueue(state);
+    renderEditor(state);
+  }
+
+  Datum.ui = { render, showToast };
+})(window.Datum = window.Datum || {});
