@@ -44,6 +44,14 @@ everything gone.
 them at once, strip metadata from the whole batch, or download everything
 as a single `.zip`.
 
+**Zip archives.** Drop in a `.zip` and it's unpacked automatically — every
+image inside is added to the batch queue just as if you'd selected them
+individually. Non-image entries, nested zips, and macOS resource-fork
+cruft (`__MACOSX/`, `.DS_Store`) are skipped, with a summary of how many
+items were skipped. Other archive formats (`.tar.gz`, etc.) aren't
+supported — not a common way photos get shared, and would add real
+dependency weight for little real-world benefit.
+
 ## Design notes and known limitations
 
 **Why HEIC converts to JPEG instead of editing in place.** JPEG's EXIF

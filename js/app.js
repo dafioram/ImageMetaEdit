@@ -13,7 +13,12 @@
   function getActive() { return state.records.find((r) => r.id === state.activeId) || null; }
 
   async function addFiles(fileList) {
-    const files = Array.from(fileList);
+    const rawFiles = Array.from(fileList);
+    const hasZip = rawFiles.some((f) => /\.zip$/i.test(f.name || ""));
+    if (hasZip) Datum.ui.showToast("Reading zip file\u2026");
+
+    const { files, skipped, zipsProcessed, zipErrors } = await Datum.zipImport.expandFiles(rawFiles);
+
     let successCount = 0;
     for (const file of files) {
       try {
@@ -26,8 +31,15 @@
       }
     }
     Datum.ui.render(state);
-    if (successCount > 0) {
-      Datum.ui.showToast(successCount === 1 ? "Added 1 file" : "Added " + successCount + " files");
+
+    if (zipErrors.length > 0) {
+      Datum.ui.showToast(zipErrors[0]);
+    } else if (successCount > 0) {
+      let msg = successCount === 1 ? "Added 1 file" : "Added " + successCount + " files";
+      if (skipped > 0) msg += " \u2014 " + skipped + (skipped === 1 ? " item skipped" : " items skipped");
+      Datum.ui.showToast(msg);
+    } else if (zipsProcessed > 0) {
+      Datum.ui.showToast("No images found in that zip file.");
     }
   }
 

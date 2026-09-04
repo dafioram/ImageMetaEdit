@@ -77,8 +77,8 @@
       "<h2>Drop a photo here</h2>" +
       "<p>See its metadata, edit GPS and camera details, then download \u2014 nothing leaves your browser.</p>" +
       '<label class="btn btn-primary" for="file-input">Choose files</label>' +
-      '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" multiple />' +
-      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC: preview + convert to edit &middot; other formats: view only</div>' +
+      '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif,.zip,application/zip" multiple />' +
+      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC: preview + convert to edit &middot; other formats: view only &middot; .zip: unpacked automatically</div>' +
       "</div>"
     );
   }
@@ -163,7 +163,7 @@
     addInput.type = "file";
     addInput.id = "file-input-more";
     addInput.multiple = true;
-    addInput.accept = "image/jpeg,image/png,image/heic,image/heif,.heic,.heif";
+    addInput.accept = "image/jpeg,image/png,image/heic,image/heif,.heic,.heif,.zip,application/zip";
     addInput.addEventListener("change", () => { if (addInput.files.length) Datum.app.addFiles(addInput.files); });
     addLabel.appendChild(addInput);
     actions.appendChild(addLabel);
@@ -321,7 +321,7 @@
       if (key === "latitude" || key === "longitude") {
         const lat = record.fields.latitude, lon = record.fields.longitude;
         if (lat !== "" && lon !== "" && isFinite(lat) && isFinite(lon)) {
-          Datum.mapWidget.setPosition(lat, lon, { recenter: false });
+          Datum.mapWidget.setPosition(lat, lon, { recenter: true, zoom: 12 });
         } else {
           Datum.mapWidget.setPosition(null, null);
         }
