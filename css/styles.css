@@ -376,6 +376,24 @@ a:focus-visible,
 }
 .preview-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .preview-frame .no-preview { color: var(--paper-faint); font-size: 12px; text-align: center; padding: 10px; }
+.preview-frame.clickable { cursor: pointer; }
+.preview-frame .expand-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brass-bright);
+  background: rgba(15, 34, 51, 0);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+  pointer-events: none;
+}
+.preview-frame.clickable:hover .expand-hint,
+.preview-frame.clickable:focus-visible .expand-hint {
+  opacity: 1;
+  background: rgba(15, 34, 51, 0.45);
+}
 
 .file-summary { flex: 1; min-width: 220px; }
 .file-summary .filename-row {
@@ -588,6 +606,45 @@ table.raw-table tr:last-child td { border-bottom: none; }
   flex-wrap: wrap;
   gap: 10px;
 }
+
+.compress-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  width: 100%;
+  padding-bottom: 12px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12.5px;
+  color: var(--paper-dim);
+}
+.compress-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.compress-toggle {
+  font-weight: 500;
+  color: var(--paper);
+}
+.compress-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brass);
+}
+.compress-row input[type="number"] {
+  width: 72px;
+  background: var(--panel-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+.compress-row input[type="number"]:focus { border-color: var(--brass); }
 .diff-count { font-size: 12.5px; color: var(--paper-dim); }
 .diff-count b { color: var(--changed); font-weight: 600; }
 
@@ -632,4 +689,109 @@ footer.credits a { color: var(--paper-dim); }
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+/* ---------- Fullscreen gallery viewer ----------
+   Lives outside the normal document flow (fixed, appended to body) so it
+   never affects the workspace/queue layout, whether open or not. */
+
+.gallery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(9, 18, 27, 0.96);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 160ms ease, visibility 0s linear 160ms;
+}
+.gallery-overlay.open {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 160ms ease, visibility 0s linear 0s;
+}
+
+.gallery-stage {
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gallery-image {
+  max-width: 92vw;
+  max-height: 88vh;
+  object-fit: contain;
+  border-radius: 3px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  display: block;
+}
+.gallery-no-preview {
+  color: var(--paper-dim);
+  font-size: 14px;
+  display: none;
+}
+
+.gallery-close {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  background: none;
+  border: none;
+  color: var(--paper-dim);
+  font-size: 34px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px 12px;
+  transition: color 120ms ease;
+}
+.gallery-close:hover { color: var(--paper); }
+
+.gallery-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--paper);
+  font-size: 30px;
+  line-height: 1;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.gallery-nav:hover { background: rgba(198, 154, 62, 0.2); border-color: var(--brass); }
+.gallery-prev { left: 18px; }
+.gallery-next { right: 18px; }
+
+.gallery-caption {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--paper-dim);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: rgba(15, 34, 51, 0.75);
+  padding: 7px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  white-space: nowrap;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 640px) {
+  .gallery-nav { width: 44px; height: 44px; font-size: 26px; }
+  .gallery-prev { left: 8px; }
+  .gallery-next { right: 8px; }
+  .gallery-close { top: 10px; right: 10px; font-size: 28px; }
 }

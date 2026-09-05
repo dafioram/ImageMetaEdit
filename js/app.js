@@ -80,6 +80,21 @@
     Datum.ui.showToast(count > 0 ? "Location applied to " + count + " other file" + (count === 1 ? "" : "s") : "No other editable files to apply to.");
   }
 
+  function applyCompressionToAll() {
+    const active = getActive();
+    if (!active) return;
+    let count = 0;
+    for (const r of state.records) {
+      if (r.id === active.id || !r.supportsEdit || Datum.model.getPixelSourceBytes(r) === null) continue;
+      r.compressEnabled = active.compressEnabled;
+      r.compressTargetMB = active.compressTargetMB;
+      r.compressMaxDimension = active.compressMaxDimension;
+      count++;
+    }
+    Datum.ui.render(state);
+    Datum.ui.showToast(count > 0 ? "Compression settings applied to " + count + " other file" + (count === 1 ? "" : "s") : "No other compressible files to apply to.");
+  }
+
   function stripAllFiles() {
     let count = 0;
     for (const r of state.records) {
@@ -102,7 +117,7 @@
 
   Datum.app = {
     getState, getActive, addFiles, removeFile, selectFile,
-    applyGpsToAll, stripAllFiles, downloadAllZip,
+    applyGpsToAll, applyCompressionToAll, stripAllFiles, downloadAllZip,
   };
 
   document.addEventListener("DOMContentLoaded", () => {

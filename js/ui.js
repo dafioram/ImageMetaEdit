@@ -170,6 +170,7 @@
 
     if (state.records.length > 1) {
       actions.appendChild(makeButton("Apply this location to all", "btn btn-sm", () => Datum.app.applyGpsToAll()));
+      actions.appendChild(makeButton("Apply compression settings to all", "btn btn-sm", () => Datum.app.applyCompressionToAll()));
       actions.appendChild(makeButton("Strip all metadata (every file)", "btn btn-sm btn-danger", () => Datum.app.stripAllFiles()));
       actions.appendChild(makeButton("Download all as .zip", "btn btn-primary", () => Datum.app.downloadAllZip()));
     }
@@ -457,6 +458,62 @@
     container.appendChild(wrap);
   }
 
+  // ---------- Editor: compression controls ----------
+
+  function buildCompressRow(record, onToggle) {
+    const row = document.createElement("div");
+    row.className = "compress-row";
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "compress-toggle";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = !!record.compressEnabled;
+    toggleLabel.appendChild(toggle);
+    toggleLabel.appendChild(document.createTextNode(" Reduce file size"));
+    row.appendChild(toggleLabel);
+
+    const targetLabel = document.createElement("label");
+    targetLabel.appendChild(document.createTextNode("Target "));
+    const targetInput = document.createElement("input");
+    targetInput.type = "number";
+    targetInput.min = "0.1";
+    targetInput.step = "0.1";
+    targetInput.className = "compress-target-input";
+    targetInput.value = record.compressTargetMB;
+    targetLabel.appendChild(targetInput);
+    targetLabel.appendChild(document.createTextNode(" MB"));
+    row.appendChild(targetLabel);
+
+    const dimLabel = document.createElement("label");
+    dimLabel.appendChild(document.createTextNode("Max dimension "));
+    const dimInput = document.createElement("input");
+    dimInput.type = "number";
+    dimInput.min = "100";
+    dimInput.step = "50";
+    dimInput.placeholder = "no limit";
+    dimInput.className = "compress-maxdim-input";
+    dimInput.value = record.compressMaxDimension || "";
+    dimLabel.appendChild(dimInput);
+    dimLabel.appendChild(document.createTextNode(" px"));
+    row.appendChild(dimLabel);
+
+    toggle.addEventListener("change", () => {
+      record.compressEnabled = toggle.checked;
+      if (onToggle) onToggle();
+    });
+    targetInput.addEventListener("input", () => {
+      const v = parseFloat(targetInput.value);
+      record.compressTargetMB = isFinite(v) && v > 0 ? v : 5;
+    });
+    dimInput.addEventListener("input", () => {
+      const v = parseFloat(dimInput.value);
+      record.compressMaxDimension = isFinite(v) && v > 0 ? v : null;
+    });
+
+    return row;
+  }
+
   // ---------- Editor shell ----------
 
   function renderEditor(state) {
@@ -475,6 +532,26 @@
       img.src = record.previewUrl;
       img.alt = "";
       previewFrame.appendChild(img);
+
+      const hint = document.createElement("div");
+      hint.className = "expand-hint";
+      hint.innerHTML = '<svg width="26" height="26" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+        '<path d="M2 8V2h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<path d="M26 8V2h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<path d="M2 20v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<path d="M26 20v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        "</svg>";
+      previewFrame.appendChild(hint);
+
+      previewFrame.classList.add("clickable");
+      previewFrame.setAttribute("role", "button");
+      previewFrame.setAttribute("tabindex", "0");
+      previewFrame.setAttribute("aria-label", "View full size");
+      const openGallery = () => Datum.gallery.open(Datum.app.getState(), record.id);
+      previewFrame.addEventListener("click", openGallery);
+      previewFrame.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openGallery(); }
+      });
     } else {
       const span = document.createElement("div");
       span.className = "no-preview";
@@ -568,6 +645,13 @@
 
     const footer = document.createElement("div");
     footer.className = "editor-footer";
+
+    const hasPixelSource = Datum.model.getPixelSourceBytes(record) !== null;
+    let downloadBtn = null;
+    if (hasPixelSource) {
+      footer.appendChild(buildCompressRow(record, () => updateDownloadLabel()));
+    }
+
     const diffCount = document.createElement("div");
     diffCount.className = "diff-count";
     diffCount.id = "diff-count";
@@ -580,9 +664,14 @@
     btnRow.style.flexWrap = "wrap";
     btnRow.appendChild(makeButton("Reset changes", "btn btn-ghost", () => { Datum.model.resetAll(record); Datum.ui.render(Datum.app.getState()); }));
     btnRow.appendChild(makeButton("Strip all metadata", "btn btn-danger", () => { Datum.model.stripAll(record); Datum.ui.render(Datum.app.getState()); }));
-    btnRow.appendChild(makeButton("Download", "btn btn-primary", () => Datum.batch.downloadSingle(record)));
+    downloadBtn = makeButton(record.compressEnabled ? "Download compressed" : "Download", "btn btn-primary", () => Datum.batch.downloadSingle(record));
+    btnRow.appendChild(downloadBtn);
     footer.appendChild(btnRow);
     panel.appendChild(footer);
+
+    function updateDownloadLabel() {
+      if (downloadBtn) downloadBtn.textContent = record.compressEnabled ? "Download compressed" : "Download";
+    }
 
     Datum.mapWidget.init("map");
     Datum.mapWidget.onClick((lat, lon) => setGpsFieldsFromMap(record, lat, lon));

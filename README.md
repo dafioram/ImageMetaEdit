@@ -52,6 +52,27 @@ items were skipped. Other archive formats (`.tar.gz`, etc.) aren't
 supported — not a common way photos get shared, and would add real
 dependency weight for little real-world benefit.
 
+**Reduce file size.** An opt-in control (per file, with a "apply to all"
+bulk button for batches) that recompresses to a target size in MB, with
+an optional max-dimension cap. It binary-searches JPEG quality to find
+the highest quality that still fits your target — typically 5-8 encode
+passes, all client-side. Files already under the target are left
+completely untouched, not needlessly re-encoded. The output is always
+JPEG regardless of source format (PNG/HEIC included), since that's the
+only format here with a reliable native browser encode path — see
+"Design notes" below for why WebP/AVIF aren't included. Compressing still
+carries your metadata: it loads the original file's full EXIF, merges
+your edits on top exactly like a normal export, and inserts that into the
+newly-compressed pixel data.
+
+**Fullscreen viewer.** Click the main preview image to open a gallery
+view — left/right arrows or arrow keys move between every file in the
+queue, wrapping at the ends. It's a plain overlay outside the normal
+document flow, so it never touches the thumbnail/queue layout. Navigating
+just swaps the displayed image; the "active" file for editing only syncs
+once, when you close the viewer, so browsing quickly through a batch
+doesn't repeatedly rebuild the editor panel.
+
 ## Design notes and known limitations
 
 **Why HEIC converts to JPEG instead of editing in place.** JPEG's EXIF
@@ -88,6 +109,23 @@ Photoshop-edited files.
 tag, not the pixels — consistent with the no-recompression guarantee for
 JPEG/PNG. Viewers that respect EXIF orientation (most modern ones) will
 display the photo correctly; a few older/simpler viewers may not.
+
+**Why compression always outputs JPEG, not WebP/AVIF.** PNG is lossless
+and a poor fit for photographic content size-wise; WebP and AVIF compress
+better than JPEG per byte, but JPEG is the one format with a reliable,
+dependency-free encode path via the browser's native `canvas.toBlob()`.
+WebP encoding via that same API works in Chrome/Firefox/Edge but has
+historically lagged in Safari; AVIF has no reliable native browser encode
+path at all and would need a much heavier WASM encoder. Given this tool's
+core job is metadata precision rather than image optimization, JPEG's
+universal support won out over marginally better compression ratios.
+
+**Compression and full metadata preservation.** Recompressing decodes to
+a `<canvas>`, which only holds pixels — so the pipeline separately loads
+the *original* file's complete EXIF (not just the curated fields), merges
+your edits on top exactly like a normal export, and inserts that into the
+newly-encoded bytes. Nothing beyond the curated fields is lost, unlike a
+naive "just recompress the pixels" approach would.
 
 ## Third-party libraries (all bundled locally in `vendor/`, no CDN)
 

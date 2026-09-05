@@ -92,6 +92,9 @@
       outputName: file.name,
       supportsEdit: kind === "jpeg" || kind === "png" || kind === "heic",
       stripRequested: false,
+      compressEnabled: false,
+      compressTargetMB: 5,
+      compressMaxDimension: null,
       error: null,
       notice: null,
       dims: { width: null, height: null },
@@ -189,9 +192,64 @@
     return record.file.type || "application/octet-stream";
   }
 
+  // The bytes that represent "the actual photo" for compression purposes,
+  // regardless of source format -- for HEIC that's the already-decoded
+  // JPEG we made at load time, not the original container.
+  function getPixelSourceBytes(record) {
+    if (record.kind === "heic") return record.heicJpegBytes;
+    if (record.kind === "jpeg" || record.kind === "png") return record.bytes;
+    return null;
+  }
+
+  // Full original exifObj (numeric-tag keyed) regardless of source
+  // format, reusing each format's existing extraction path. Used so
+  // compression can preserve everything a normal export would, not just
+  // the curated fields.
+  function loadExifObjForRecord(record) {
+    const mw = Datum.metadataWriter;
+    if (record.kind === "jpeg") {
+      return mw.loadExifObj(Datum.bin.uint8ToBinaryString(record.bytes));
+    }
+    if (record.kind === "png") {
+      const tiff = Datum.pngCodec.getExifChunkData(record.bytes);
+      return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
+    }
+    if (record.kind === "heic") {
+      const tiff = Datum.heicBoxReader.extractExifTiff(record.bytes);
+      return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
+    }
+    return mw.emptyExifObj();
+  }
+
+  // Compression-aware output. Only actually recompresses when enabled AND
+  // the source exceeds the target size -- files already under target are
+  // left completely untouched, matching a normal export exactly.
+  async function getOutputBytesAsync(record) {
+    if (!record.supportsEdit || !record.compressEnabled) {
+      return { bytes: getOutputBytes(record), compressed: false };
+    }
+    const pixelSource = getPixelSourceBytes(record);
+    const targetBytes = Math.round((record.compressTargetMB || 5) * 1024 * 1024);
+    if (!pixelSource || pixelSource.length <= targetBytes) {
+      return { bytes: getOutputBytes(record), compressed: false, skipped: true };
+    }
+    try {
+      const img = await Datum.compress.loadImageFromBytes(pixelSource);
+      const canvas = Datum.compress.drawToCanvas(img, record.compressMaxDimension || null);
+      const { blob, reachedTarget } = await Datum.compress.compressToTargetSize(canvas, targetBytes);
+      const pixelBytes = new Uint8Array(await blob.arrayBuffer());
+      const exifObj = loadExifObjForRecord(record);
+      const finalBytes = Datum.metadataWriter.insertMergedExif(exifObj, record.fields, pixelBytes, record.stripRequested);
+      return { bytes: finalBytes, compressed: true, reachedTarget };
+    } catch (e) {
+      return { bytes: getOutputBytes(record), compressed: false, error: (e && e.message) || String(e) };
+    }
+  }
+
   Datum.model = {
     detectKind, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
+    getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };
 })(window.Datum = window.Datum || {});

@@ -233,8 +233,23 @@
     return out;
   }
 
+  // Same merge logic as writeJpeg, but the exifObj is supplied by the
+  // caller (already loaded from wherever the original metadata lives) and
+  // gets inserted into separately-supplied pixel bytes -- used by the
+  // "reduce file size" pipeline, where the pixels come from a fresh
+  // canvas re-encode rather than the original file.
+  function insertMergedExif(exifObj, fields, jpegPixelBytes, strip) {
+    const binaryStr = bin.uint8ToBinaryString(jpegPixelBytes);
+    if (strip) return bin.binaryStringToUint8(window.piexif.remove(binaryStr));
+    applyFieldsToExifObj(exifObj, fields);
+    if (exifObjIsEmpty(exifObj)) return bin.binaryStringToUint8(window.piexif.remove(binaryStr));
+    const exifBytes = window.piexif.dump(exifObj);
+    const newBinary = window.piexif.insert(exifBytes, binaryStr);
+    return bin.binaryStringToUint8(newBinary);
+  }
+
   Datum.metadataWriter = {
     loadExifObj, applyFieldsToExifObj, exifObjIsEmpty, writeJpeg, writePng, emptyExifObj,
-    fieldsFromExifObj, rawDumpFromExifObj,
+    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif,
   };
 })(window.Datum = window.Datum || {});
