@@ -43,6 +43,10 @@
       Datum.ui.showToast("Compressing\u2026");
     }
     const result = await Datum.model.getOutputBytesAsync(record);
+    if (result.failed) {
+      Datum.ui.showToast("Couldn't export " + (record.outputName || record.file.name) + ": " + result.error + ". Nothing was downloaded.");
+      return result;
+    }
     const { name, mime } = resolveNameAndMime(record, result);
     const blob = new Blob([result.bytes], { type: mime });
     triggerDownload(blob, name);
@@ -72,9 +76,15 @@
     const used = new Set();
     let compressedCount = 0;
     let missedTargetCount = 0;
+    const failedNames = [];
 
     for (const record of records) {
       const result = await Datum.model.getOutputBytesAsync(record);
+      if (result.failed) {
+        // Leave out only the file that failed; the rest of the archive is fine.
+        failedNames.push(record.outputName || record.file.name);
+        continue;
+      }
       const { name } = resolveNameAndMime(record, result);
       const finalName = uniqueName(name, used);
       zip.file(finalName, result.bytes);
@@ -82,14 +92,25 @@
       if (result.compressed && result.reachedTarget === false) missedTargetCount++;
     }
 
+    if (failedNames.length === records.length) {
+      Datum.ui.showToast("Nothing could be exported, so no zip was downloaded.");
+      return;
+    }
+
     const blob = await zip.generateAsync({ type: "blob" });
     triggerDownload(blob, zipName || "datum-export.zip");
 
+    const parts = [];
     if (compressedCount > 0) {
       let msg = "Compressed " + compressedCount + (compressedCount === 1 ? " file" : " files") + " in this export.";
       if (missedTargetCount > 0) msg += " " + missedTargetCount + " couldn't fully reach target size.";
-      Datum.ui.showToast(msg);
+      parts.push(msg);
     }
+    if (failedNames.length > 0) {
+      parts.push("Left out " + failedNames.length + (failedNames.length === 1 ? " file" : " files") +
+        " that couldn't be exported: " + failedNames.join(", ") + ".");
+    }
+    if (parts.length > 0) Datum.ui.showToast(parts.join(" "));
   }
 
   Datum.batch = { downloadSingle, downloadAllAsZip, triggerDownload };

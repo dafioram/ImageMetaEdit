@@ -26,6 +26,41 @@
     return "other";
   }
 
+  // Formats identified from the first bytes of the file. The name and MIME
+  // type are only hints; these decide what the file really is. `exts` lists
+  // the extensions that match this content, the first being the one to use.
+  const HEIF_BRANDS = ["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"];
+  function ascii(bytes, start, end) {
+    return String.fromCharCode.apply(null, bytes.subarray(start, end));
+  }
+  const SIGNATURES = [
+    { kind: "jpeg", label: "JPEG", exts: [".jpg", ".jpeg"], test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+    { kind: "png", label: "PNG", exts: [".png"], test: (b) => ascii(b, 0, 8) === "\x89PNG\r\n\x1a\n" },
+    { kind: "heic", label: "HEIC", exts: [".heic", ".heif"], test: (b) => ascii(b, 4, 8) === "ftyp" && HEIF_BRANDS.includes(ascii(b, 8, 12)) },
+    { kind: "other", label: "GIF", exts: [".gif"], test: (b) => ascii(b, 0, 4) === "GIF8" },
+    { kind: "other", label: "BMP", exts: [".bmp"], test: (b) => ascii(b, 0, 2) === "BM" },
+    { kind: "other", label: "WebP", exts: [".webp"], test: (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP" },
+    { kind: "other", label: "TIFF", exts: [".tif", ".tiff"], test: (b) => ascii(b, 0, 4) === "II*\0" || ascii(b, 0, 4) === "MM\0*" },
+    { kind: "other", label: "AVIF", exts: [".avif"], test: (b) => ascii(b, 4, 8) === "ftyp" && ascii(b, 8, 12) === "avif" },
+  ];
+
+  // Returns the SIGNATURES entry the bytes match, or null if none match.
+  function sniffFormat(bytes) {
+    return SIGNATURES.find((s) => s.test(bytes)) || null;
+  }
+
+  function withExtension(name, ext) {
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    return base + ext;
+  }
+
+  // Errors come back as values rather than being thrown, so the caller can
+  // refuse the download with a message.
+  function errorMessage(e) {
+    return (e && e.message) || String(e);
+  }
+
   const round2 = (n) => Math.round(n * 100) / 100;
   const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
@@ -97,8 +132,20 @@
 
   async function createFileRecord(file) {
     const id = "f" + (++idCounter) + "_" + Date.now().toString(36);
-    const kind = detectKind(file);
     const bytes = await Datum.bin.fileToUint8Array(file);
+    const sniffed = sniffFormat(bytes);
+    const kind = sniffed ? sniffed.kind : detectKind(file);
+
+    // A file whose name disagrees with its content keeps its data as it is.
+    // Only the extension is corrected, and the user is told why.
+    const lowerName = (file.name || "").toLowerCase();
+    const nameMatches = sniffed ? sniffed.exts.some((ext) => lowerName.endsWith(ext)) : true;
+    let mismatchNotice = null;
+    if (sniffed && !nameMatches) {
+      const how = sniffed.kind === "other" ? "shown as view only" : "handled as " + sniffed.label;
+      mismatchNotice = 'This file is named "' + file.name + '" but its contents are ' + sniffed.label + '. It\'s ' + how +
+        ' and will download as "' + withExtension(file.name, sniffed.exts[0]) + '" with its data unchanged.';
+    }
 
     const record = {
       id, file, kind, bytes,
@@ -107,7 +154,7 @@
       rawMetaPretty: {},
       fields: {},
       originalFields: {},
-      outputName: file.name,
+      outputName: mismatchNotice ? withExtension(file.name, sniffed.exts[0]) : file.name,
       supportsEdit: kind === "jpeg" || kind === "png" || kind === "heic",
       stripRequested: false,
       compressEnabled: false,
@@ -127,7 +174,7 @@
         record.dims.height = canvas.height;
         record.heicJpegBytes = await Datum.heic.canvasToJpegBytes(canvas, 0.92);
         record.previewUrl = canvas.toDataURL("image/jpeg", 0.85);
-        const base = file.name.replace(/\.(heic|heif)$/i, "");
+        const base = file.name.replace(/\.[^.]+$/, "");
         record.outputName = (base || "photo") + ".jpg";
 
         // HEIC metadata goes through our own box reader + piexif rather
@@ -160,6 +207,7 @@
       record.supportsEdit = false;
     }
 
+    record.notice = [mismatchNotice, record.notice].filter(Boolean).join(" ") || null;
     record.originalFields = Object.assign({}, record.fields);
     return record;
   }
@@ -240,17 +288,29 @@
     return mw.emptyExifObj();
   }
 
+  // Normal export. A failure is returned as { failed: true } and never
+  // replaced with the original bytes: those still hold any metadata the user
+  // asked to strip, and any edits they made.
+  function plainOutput(record) {
+    try {
+      return { bytes: getOutputBytes(record), compressed: false };
+    } catch (e) {
+      return { bytes: null, compressed: false, failed: true, error: errorMessage(e) };
+    }
+  }
+
   // Compression-aware output. Only actually recompresses when enabled AND
   // the source exceeds the target size -- files already under target are
   // left completely untouched, matching a normal export exactly.
   async function getOutputBytesAsync(record) {
     if (!record.supportsEdit || !record.compressEnabled) {
-      return { bytes: getOutputBytes(record), compressed: false };
+      return plainOutput(record);
     }
     const pixelSource = getPixelSourceBytes(record);
     const targetBytes = targetBytesFor(record);
     if (!pixelSource || pixelSource.length <= targetBytes) {
-      return { bytes: getOutputBytes(record), compressed: false, skipped: true };
+      const plain = plainOutput(record);
+      return plain.failed ? plain : Object.assign(plain, { skipped: true });
     }
     try {
       const img = await Datum.compress.loadImageFromBytes(pixelSource);
@@ -261,7 +321,10 @@
       const finalBytes = Datum.metadataWriter.insertMergedExif(exifObj, record.fields, pixelBytes, record.stripRequested);
       return { bytes: finalBytes, compressed: true, reachedTarget };
     } catch (e) {
-      return { bytes: getOutputBytes(record), compressed: false, error: (e && e.message) || String(e) };
+      // Compression failed: fall back to a normal export, which is refused
+      // (not sent unstripped) if it fails too.
+      const plain = plainOutput(record);
+      return plain.failed ? plain : Object.assign(plain, { error: errorMessage(e) });
     }
   }
 

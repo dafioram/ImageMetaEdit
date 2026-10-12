@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   appTest, openApp, addFixtures, records, downloadFrom, selectQueueItem, setField,
-  setCompression, fixture, isJpeg, isPng,
+  setCompression, fixture, isJpeg, isPng, addRenamed, decodedSize,
 } from "../helpers/app.mjs";
 
 appTest("first load shows the dropzone and accepts every supported type", async (s) => {
@@ -100,16 +100,15 @@ appTest("Download of a view-only file saves the original bytes", async (s) => {
   assert.ok(bytes.equals(readFileSync(fixture("sample.webp"))));
 });
 
-appTest("a PNG saved with a .jpg name can still be downloaded", async (s) => {
-  await s.page.setInputFiles("#file-input", [
-    { name: "renamed.jpg", mimeType: "image/jpeg", buffer: readFileSync(fixture("photo-noexif.png")) },
-  ]);
-  await s.page.waitForFunction(() => Datum.app.getState().records.length === 1);
-  const { name, bytes } = await downloadFrom(s.page, s.page.getByRole("button", { name: "Download", exact: true }), 5000);
-  assert.ok(name && bytes.length > 0);
-  assert.ok(isPng(bytes) || isJpeg(bytes), "download should be an image");
-}, {
-  todo: "Known bug: the app picks the JPEG path from the extension, and piexif throws 'Given data is not jpeg' outside the error handling, so Download does nothing. Expected: a download, or a visible error.",
+appTest("a PNG saved with a .jpg name downloads as a PNG with its image unchanged", async (s) => {
+  await addRenamed(s, { as: "renamed.jpg", mimeType: "image/jpeg", from: "photo-noexif.png" });
+  const { name, bytes } = await downloadFrom(s.page, s.page.getByRole("button", { name: "Download", exact: true }));
+  assert.equal(name, "renamed.png", "extension should follow the real format");
+  assert.ok(isPng(bytes), "the download should still be a PNG");
+  const size = await decodedSize(s.page, bytes.toString("base64"), "image/png");
+  assert.deepEqual(size, { width: 200, height: 150 });
+  const [r] = await records(s.page);
+  assert.match(r.notice, /named "renamed\.jpg" but its contents are PNG/);
 });
 
 // ---- Size dropdown.
