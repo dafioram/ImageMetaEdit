@@ -20,6 +20,31 @@ The only feature that needs an internet connection is the map tile imagery
 in the Location tab (tiles come from OpenStreetMap). Everything else —
 reading, editing, and writing metadata — works completely offline.
 
+## Running the tests
+
+The suite runs the real app in a headless browser (Playwright). It needs
+Node 22 or newer.
+
+    npm ci
+    npx playwright install chromium    # once, or point CHROMIUM_PATH at an install
+    npm test
+
+- `npm run test:static` checks syntax, that every referenced file exists,
+  that no unexpected external URLs appear, that the sample files match their
+  extensions, and that the test tooling is pinned. No browser needed.
+- `npm run test:browser` drives the app the way a person would. It covers
+  every input format, checks that each export is still a decodable image of
+  the same size, checks metadata reads and writes, compression, zip import
+  and export, the UI controls, and audits every network request.
+- `BROWSER=firefox` or `BROWSER=webkit` runs the browser tests in another
+  engine (after `npx playwright install firefox` or `webkit`).
+
+Sample files live in `tests/fixtures/`. `tests/fixtures/generate.py` rebuilds
+them (it needs Pillow and pillow-heif). Tests marked TODO are known gaps: a
+truncated or zero-byte file is not flagged, and a PNG saved with a `.jpg`
+name cannot be downloaded. They run and report without failing the build
+until they are fixed.
+
 ## What it does
 
 | Format | Editing |
