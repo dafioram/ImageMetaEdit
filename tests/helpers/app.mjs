@@ -142,11 +142,29 @@ export async function addFixtures(session, names, expectedCount) {
   const selector = before === 0 ? "#file-input" : "#file-input-more";
   await page.setInputFiles(selector, names.map(fixture));
   const target = expectedCount === undefined ? before + names.length : expectedCount;
-  await page.waitForFunction(
-    (n) => Datum.app.getState().records.length === n && document.querySelectorAll(".queue-item").length === n,
-    target,
-    { timeout: 30000 }
-  );
+  // HEIC is decoded by libheif, which loads on first use and is the slowest
+  // step on a busy runner, so it gets a longer wait.
+  const timeout = names.some((n) => /\.(heic|heif)$/i.test(n)) ? 60000 : 30000;
+  try {
+    await page.waitForFunction(
+      (n) => Datum.app.getState().records.length === n && document.querySelectorAll(".queue-item").length === n,
+      target,
+      { timeout }
+    );
+  } catch (e) {
+    // Say what the app was doing, so a failure shows whether a decode failed
+    // (an error toast, or a record with an error) or simply never finished.
+    const state = await page
+      .evaluate(() => ({
+        records: Datum.app.getState().records.map((r) => ({ name: r.file.name, kind: r.kind, error: r.error })),
+        queueItems: document.querySelectorAll(".queue-item").length,
+        toast: document.getElementById("toast") ? document.getElementById("toast").textContent : null,
+      }))
+      .catch(() => "page unavailable");
+    throw new Error(
+      `Waited ${timeout}ms for ${target} record(s) from [${names.join(", ")}]. App state: ${JSON.stringify(state)}`
+    );
+  }
 }
 
 // Plain-data view of every record, safe to serialize out of the page.
