@@ -87,7 +87,8 @@
     for (const r of state.records) {
       if (r.id === active.id || !r.supportsEdit || Datum.model.getPixelSourceBytes(r) === null) continue;
       r.compressEnabled = active.compressEnabled;
-      r.compressTargetMB = active.compressTargetMB;
+      r.compressTarget = active.compressTarget;
+      r.compressTargetUnit = active.compressTargetUnit;
       r.compressMaxDimension = active.compressMaxDimension;
       count++;
     }

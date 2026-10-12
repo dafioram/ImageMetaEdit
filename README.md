@@ -53,8 +53,9 @@ supported — not a common way photos get shared, and would add real
 dependency weight for little real-world benefit.
 
 **Reduce file size.** An opt-in control (per file, with a "apply to all"
-bulk button for batches) that recompresses to a target size in MB, with
-an optional max-dimension cap. It binary-searches JPEG quality to find
+bulk button for batches) that recompresses to a target size in MB or KB
+(pick the unit from the dropdown; switching units keeps the same size
+limit), with an optional max-dimension cap. It binary-searches JPEG quality to find
 the highest quality that still fits your target — typically 5-8 encode
 passes, all client-side. Files already under the target are left
 completely untouched, not needlessly re-encoded. The output is always

@@ -645,6 +645,16 @@ table.raw-table tr:last-child td { border-bottom: none; }
   padding: 5px 8px;
 }
 .compress-row input[type="number"]:focus { border-color: var(--brass); }
+.compress-row select {
+  background: var(--panel-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+.compress-row select:focus { border-color: var(--brass); }
 .diff-count { font-size: 12.5px; color: var(--paper-dim); }
 .diff-count b { color: var(--changed); font-weight: 600; }
 
