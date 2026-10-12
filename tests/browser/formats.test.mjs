@@ -2,7 +2,8 @@
 // lands in the right category: editable (JPEG, PNG, HEIC/HEIF) or view-only
 // (everything else, passed through unchanged).
 import assert from "node:assert/strict";
-import { appTest, addFixtures, records, toastText } from "../helpers/app.mjs";
+import { readFileSync } from "node:fs";
+import { appTest, addFixtures, addRenamed, records, toastText, outputOf, readExif, bytesOf, isJpeg, fixture } from "../helpers/app.mjs";
 
 const EDITABLE = [
   { file: "photo-exif.jpg", kind: "jpeg", note: "JPEG with camera, date, GPS EXIF" },
@@ -73,4 +74,43 @@ appTest("uploading a zip toasts the count and skips non-images", async (s) => {
   const message = await toastText(s.page, /Added 4 files/);
   assert.match(message, /Added 4 files/);
   assert.match(message, /2 items skipped/, "notes.txt and nested.zip are skipped; macOS cruft is ignored silently");
+});
+
+// The file's contents decide its type, not its name. The data is never
+// re-encoded; only a wrong extension is corrected.
+
+appTest("a JPEG named .png is handled as a JPEG, keeps its metadata, and downloads as .jpg", async (s) => {
+  await addRenamed(s, { as: "camera.png", mimeType: "image/png", from: "photo-exif.jpg" });
+  const [r] = await records(s.page);
+  assert.equal(r.kind, "jpeg");
+  assert.equal(r.outputName, "camera.jpg");
+  assert.match(r.notice, /named "camera\.png" but its contents are JPEG/);
+  assert.equal(r.fields.make, "Datum Test Cam", "metadata should still be read");
+  const out = await outputOf(s.page, 0);
+  assert.ok(isJpeg(bytesOf(out.b64)), "export should still be a JPEG");
+  assert.equal((await readExif(s.page, out.b64)).Make, "Datum Test Cam");
+});
+
+appTest("a PNG named .heic is handled as a PNG and downloads as .png", async (s) => {
+  await addRenamed(s, { as: "shot.heic", mimeType: "image/heic", from: "photo-noexif.png" });
+  const [r] = await records(s.page);
+  assert.equal(r.kind, "png");
+  assert.equal(r.outputName, "shot.png");
+  assert.equal(r.supportsEdit, true);
+});
+
+appTest("a GIF named .jpg is view-only and downloads as .gif", async (s) => {
+  await addRenamed(s, { as: "anim.jpg", mimeType: "image/jpeg", from: "sample.gif" });
+  const [r] = await records(s.page);
+  assert.equal(r.kind, "other");
+  assert.equal(r.supportsEdit, false);
+  assert.equal(r.outputName, "anim.gif");
+  assert.match(r.notice, /contents are GIF.*view only/);
+});
+
+appTest("a correctly named file gets no mismatch notice", async (s) => {
+  await addFixtures(s, ["photo-noexif.png"]);
+  const [r] = await records(s.page);
+  assert.equal(r.outputName, "photo-noexif.png");
+  assert.equal(r.notice, null);
 });

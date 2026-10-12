@@ -299,3 +299,16 @@ export async function toastText(page, pattern = /./) {
   );
   return page.locator("#toast").textContent();
 }
+
+// Uploads a fixture under a different name, as if the person had renamed it.
+export async function addRenamed(session, { as, mimeType, from }) {
+  const { page } = session;
+  const before = await page.evaluate(() => Datum.app.getState().records.length);
+  const selector = before === 0 ? "#file-input" : "#file-input-more";
+  await page.setInputFiles(selector, [{ name: as, mimeType, buffer: readFileSync(fixture(from)) }]);
+  await page.waitForFunction(
+    (n) => Datum.app.getState().records.length === n && document.querySelectorAll(".queue-item").length === n,
+    before + 1,
+    { timeout: 30000 }
+  );
+}
