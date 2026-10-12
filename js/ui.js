@@ -477,13 +477,30 @@
     targetLabel.appendChild(document.createTextNode("Target "));
     const targetInput = document.createElement("input");
     targetInput.type = "number";
-    targetInput.min = "0.1";
-    targetInput.step = "0.1";
     targetInput.className = "compress-target-input";
-    targetInput.value = record.compressTargetMB;
     targetLabel.appendChild(targetInput);
-    targetLabel.appendChild(document.createTextNode(" MB"));
+    const unitSelect = document.createElement("select");
+    unitSelect.className = "compress-unit-select";
+    unitSelect.setAttribute("aria-label", "Target size unit");
+    for (const unitKey of Object.keys(Datum.model.COMPRESS_UNITS)) {
+      const o = document.createElement("option");
+      o.value = unitKey;
+      o.textContent = unitKey;
+      unitSelect.appendChild(o);
+    }
+    targetLabel.appendChild(unitSelect);
     row.appendChild(targetLabel);
+
+    // Shows the record's target in its current unit, with the input's
+    // step/min matching that unit (0.1 MB vs whole KB).
+    function syncTargetInput() {
+      const unit = Datum.model.compressUnit(record);
+      unitSelect.value = record.compressTargetUnit in Datum.model.COMPRESS_UNITS ? record.compressTargetUnit : "MB";
+      targetInput.min = unit.min;
+      targetInput.step = unit.step;
+      targetInput.value = record.compressTarget;
+    }
+    syncTargetInput();
 
     const dimLabel = document.createElement("label");
     dimLabel.appendChild(document.createTextNode("Max dimension "));
@@ -504,7 +521,17 @@
     });
     targetInput.addEventListener("input", () => {
       const v = parseFloat(targetInput.value);
-      record.compressTargetMB = isFinite(v) && v > 0 ? v : 5;
+      record.compressTarget = isFinite(v) && v > 0 ? v : Datum.model.compressUnit(record).default;
+    });
+    unitSelect.addEventListener("change", () => {
+      // Convert the current target so the actual size limit stays the same
+      // when switching units (5 MB becomes 5120 KB, not 5 KB).
+      const bytes = Datum.model.targetBytesFor(record);
+      const next = Datum.model.COMPRESS_UNITS[unitSelect.value];
+      const factor = Math.pow(10, next.precision);
+      record.compressTargetUnit = unitSelect.value;
+      record.compressTarget = Math.round((bytes / next.bytes) * factor) / factor;
+      syncTargetInput();
     });
     dimInput.addEventListener("input", () => {
       const v = parseFloat(dimInput.value);

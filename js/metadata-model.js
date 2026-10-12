@@ -77,6 +77,24 @@
     });
   }
 
+  // Units for the "reduce file size" target. `default` is the starting value
+  // in that unit (5 MB either way), `precision` is how many decimals the
+  // UI keeps when converting between units.
+  const COMPRESS_UNITS = {
+    MB: { bytes: 1024 * 1024, default: 5, precision: 2, step: "0.1", min: "0.1" },
+    KB: { bytes: 1024, default: 5120, precision: 0, step: "1", min: "1" },
+  };
+
+  function compressUnit(record) {
+    return COMPRESS_UNITS[record.compressTargetUnit] || COMPRESS_UNITS.MB;
+  }
+
+  function targetBytesFor(record) {
+    const unit = compressUnit(record);
+    const v = record.compressTarget > 0 ? record.compressTarget : unit.default;
+    return Math.round(v * unit.bytes);
+  }
+
   async function createFileRecord(file) {
     const id = "f" + (++idCounter) + "_" + Date.now().toString(36);
     const kind = detectKind(file);
@@ -93,7 +111,8 @@
       supportsEdit: kind === "jpeg" || kind === "png" || kind === "heic",
       stripRequested: false,
       compressEnabled: false,
-      compressTargetMB: 5,
+      compressTarget: COMPRESS_UNITS.MB.default,
+      compressTargetUnit: "MB",
       compressMaxDimension: null,
       error: null,
       notice: null,
@@ -229,7 +248,7 @@
       return { bytes: getOutputBytes(record), compressed: false };
     }
     const pixelSource = getPixelSourceBytes(record);
-    const targetBytes = Math.round((record.compressTargetMB || 5) * 1024 * 1024);
+    const targetBytes = targetBytesFor(record);
     if (!pixelSource || pixelSource.length <= targetBytes) {
       return { bytes: getOutputBytes(record), compressed: false, skipped: true };
     }
@@ -250,6 +269,7 @@
     detectKind, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
     getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync,
+    COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };
 })(window.Datum = window.Datum || {});
