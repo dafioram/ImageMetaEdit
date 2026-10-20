@@ -58,7 +58,41 @@
   // Errors come back as values rather than being thrown, so the caller can
   // refuse the download with a message.
   function errorMessage(e) {
-    return (e && e.message) || String(e);
+    return Datum.errors.describe(e);
+  }
+
+  function hexStart(bytes) {
+    return Array.from(bytes.subarray(0, 4)).map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+  }
+
+  // Load-time structural check, as specific as the file allows. `fatal`
+  // means the file can't be used as an image; `warning` means it loads but
+  // is damaged, and the person should know before relying on the result.
+  function inspectStructure(kind, bytes) {
+    if (kind === "jpeg") {
+      let parsed;
+      try {
+        parsed = Datum.jpegSegments.parse(bytes);
+      } catch (e) {
+        return { warning: "This JPEG's header is damaged (" + Datum.errors.describe(e).replace(/^the JPEG is damaged: /, "") + "). It may still display, but saving changes can fail." };
+      }
+      if (!parsed.hasScan) {
+        return { fatal: "This JPEG has no image data: the file ends after its header, " + bytes.length.toLocaleString("en-US") + " bytes in." };
+      }
+      if (parsed.eoiEnd === null) {
+        return {
+          warning: "This JPEG is cut off: its image data stops before the end-of-image marker, " + bytes.length.toLocaleString("en-US") +
+            " bytes in. The part that arrived is shown and the rest of the picture (usually the bottom) is missing or grey. " +
+            "Downloads keep it as it is, and some apps won't open it; turn on \"Reduce file size\" to save a re-encoded copy that opens everywhere.",
+        };
+      }
+      return {};
+    }
+    if (kind === "png") {
+      const { problem } = Datum.pngCodec.inspect(bytes);
+      return problem ? { warning: "This PNG is damaged: " + problem + ". What can be decoded is shown." } : {};
+    }
+    return {};
   }
 
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -105,9 +139,9 @@
         record.dims.width = img.naturalWidth;
         record.dims.height = img.naturalHeight;
         URL.revokeObjectURL(img.src);
-        resolve();
+        resolve(true);
       };
-      img.onerror = () => resolve();
+      img.onerror = () => { URL.revokeObjectURL(img.src); resolve(false); };
       img.src = URL.createObjectURL(file);
     });
   }
@@ -163,8 +197,38 @@
       compressMaxDimension: null,
       error: null,
       notice: null,
+      warning: null,
       dims: { width: null, height: null },
     };
+
+    // Files that can't be an image at all are flagged now, with what is
+    // known, rather than failing later at download.
+    const claimed = detectKind(file);
+    let unusable = null;
+    if (bytes.length === 0) {
+      unusable = "This file is empty (0 bytes).";
+    } else if (!sniffed && claimed !== "other") {
+      unusable = 'This file is named "' + file.name + '" but its contents aren\'t a ' + claimed.toUpperCase() +
+        " image or any format this app recognizes (it starts with the bytes " + hexStart(bytes) + ").";
+    }
+    if (unusable) {
+      record.kind = "other";
+      record.supportsEdit = false;
+      record.error = unusable;
+      record.originalFields = {};
+      return record;
+    }
+
+    const structure = inspectStructure(kind, bytes);
+    if (structure.fatal) {
+      record.kind = "other";
+      record.supportsEdit = false;
+      record.error = structure.fatal;
+      record.previewUrl = URL.createObjectURL(file);
+      record.originalFields = {};
+      return record;
+    }
+    record.warning = structure.warning || null;
 
     try {
       if (kind === "heic") {
@@ -200,7 +264,10 @@
         ]);
         record.rawMetaPretty = pretty || {};
         record.fields = fieldsFromParsed(strict);
-        await loadDims(record, file);
+        const decoded = await loadDims(record, file);
+        if (!decoded && !record.warning) {
+          record.warning = "The browser couldn't display this image, so its data may be damaged. Its metadata can still be edited.";
+        }
         if (record.fields.latitude === "" && Datum.xmp.hasGps(readXmpText(kind, bytes))) {
           record.notice = "This file also stores a location in its XMP metadata, which the editor can't show. \"Strip all metadata\" removes it.";
         }
@@ -210,7 +277,7 @@
         await loadDims(record, file);
       }
     } catch (e) {
-      record.error = "Could not read this file: " + (e && e.message ? e.message : String(e));
+      record.error = Datum.errors.sentence("Couldn't read this file: " + Datum.errors.describe(e));
       record.supportsEdit = false;
     }
 
@@ -342,7 +409,18 @@
   // Compression-aware output. Only actually recompresses when enabled AND
   // the source exceeds the target size -- files already under target are
   // left completely untouched, matching a normal export exactly.
+  // What has to be fixed before this record can be written, as one
+  // clause ("ISO must be ...; Latitude must be ..."), or null.
+  function validationError(record) {
+    if (!record.supportsEdit) return null;
+    const problems = Datum.validateFields(record.fields);
+    if (!problems.length) return null;
+    return problems.map((p) => Datum.errors.trimSentence(p.message)).join("; ");
+  }
+
   async function getOutputBytesAsync(record) {
+    const invalid = validationError(record);
+    if (invalid) return { bytes: null, compressed: false, failed: true, invalid: true, error: invalid };
     if (!record.supportsEdit || !record.compressEnabled) {
       return plainOutput(record);
     }
@@ -375,7 +453,7 @@
   Datum.model = {
     detectKind, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
-    getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas,
+    getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas, validationError,
     COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };

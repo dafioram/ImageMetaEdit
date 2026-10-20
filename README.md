@@ -65,6 +65,16 @@ lens calibration data, whatever — is preserved untouched. "Strip all
 metadata" is a separate, explicit action for when you actually want
 everything gone.
 
+**Checks as you type, and on load.** Values a file can't store (a negative
+ISO, latitude 95, a description too long for the metadata block) are
+marked next to the field with the reason, and that file can't be
+downloaded until they're fixed; the rest of a batch still exports. Files
+are checked when added: an empty file, or one whose contents aren't an
+image, is flagged straight away, and a damaged JPEG or PNG still loads
+with a warning that says what's wrong (for example, where a cut-off JPEG
+ends). Turning on "Reduce file size" saves a cut-off JPEG as a complete
+re-encoded copy.
+
 **Batch mode.** Upload multiple files, apply one GPS location to all of
 them at once, strip metadata from the whole batch, or download everything
 as a single `.zip`.

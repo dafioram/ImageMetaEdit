@@ -21,11 +21,12 @@
     if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error("Not a JPEG file");
     const segments = [];
     let offset = 2;
+    let hasScan = false;
     while (offset + 4 <= bytes.length) {
       if (bytes[offset] !== 0xff) throw new Error("Corrupt JPEG: expected a marker at byte " + offset);
       const marker = bytes[offset + 1];
       if (marker === 0xff) { offset++; continue; } // fill byte
-      if (marker === SOS) break;
+      if (marker === SOS) { hasScan = true; break; }
       const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
       if (length < 2 || offset + 2 + length > bytes.length) throw new Error("Corrupt JPEG: segment runs past the end of the file");
       segments.push({ marker, start: offset, end: offset + 2 + length });
@@ -36,10 +37,12 @@
     // a restart marker (D0-D7) or a real marker, so the first FF D9 is the
     // end of the main image.
     let eoiEnd = null;
-    for (let i = scanStart + 2; i + 1 < bytes.length; i++) {
-      if (bytes[i] === 0xff && bytes[i + 1] === EOI) { eoiEnd = i + 2; break; }
+    if (hasScan) {
+      for (let i = scanStart + 2; i + 1 < bytes.length; i++) {
+        if (bytes[i] === 0xff && bytes[i + 1] === EOI) { eoiEnd = i + 2; break; }
+      }
     }
-    return { segments, scanStart, eoiEnd };
+    return { segments, scanStart, eoiEnd, hasScan };
   }
 
   function isXmp(bytes, seg) {

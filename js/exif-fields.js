@@ -65,7 +65,70 @@
     orientation: "Orientation",
   };
 
+  // ---- Validation. Each rule describes what a field may hold, in words a
+  // person can act on. The ranges also keep values inside what EXIF can
+  // store (ISO is a 16-bit number; apertures and lengths are 32-bit
+  // fractions), which is what used to fail exports with "'pack' error."
+
+  // Each text field's limit. Together they stay well inside the 64 KB a
+  // JPEG metadata segment can hold.
+  const TEXT_LIMIT_BYTES = 8000;
+
+  function isBlank(v) {
+    return v === "" || v === undefined || v === null;
+  }
+
+  function utf8Length(s) {
+    return new TextEncoder().encode(String(s)).length;
+  }
+
+  function between(v, min, max) {
+    const n = Number(v);
+    return typeof v !== "boolean" && String(v).trim() !== "" && isFinite(n) && n >= min && n <= max;
+  }
+
+  const NUMBER_RULES = {
+    fNumber: { ok: (v) => between(v, 0.01, 1000) && Number(v) > 0, message: "Aperture must be a number above 0, like 2.8." },
+    exposureTime: {
+      ok: (v) => {
+        const r = Datum.fieldCodec.parseExposureInput(v);
+        return !!r && r[1] > 0 && r[0] > 0 && r[0] / r[1] <= 86400;
+      },
+      message: "Shutter speed must be a positive number of seconds, like 0.004 or 1/250.",
+    },
+    iso: { ok: (v) => between(v, 1, 65535) && Number.isInteger(Number(v)), message: "ISO must be a whole number from 1 to 65,535." },
+    focalLength: { ok: (v) => between(v, 0.01, 10000) && Number(v) > 0, message: "Focal length must be a number of millimetres above 0, like 50." },
+  };
+
+  // Returns [{ key, message }] for every field that can't be written.
+  function validateFields(fields) {
+    const problems = [];
+    const add = (key, message) => problems.push({ key, message });
+    for (const def of schema()) {
+      const v = fields[def.key];
+      if (isBlank(v)) continue;
+      if (def.type === "ascii") {
+        const n = utf8Length(v);
+        if (n > TEXT_LIMIT_BYTES) add(def.key, def.label + " is too long (" + n.toLocaleString("en-US") + " bytes; the limit is " + TEXT_LIMIT_BYTES.toLocaleString("en-US") + ").");
+      } else if (NUMBER_RULES[def.key] && !NUMBER_RULES[def.key].ok(v)) {
+        add(def.key, NUMBER_RULES[def.key].message);
+      }
+    }
+    const lat = fields.latitude, lon = fields.longitude, alt = fields.altitude;
+    if (isBlank(lat) !== isBlank(lon)) {
+      add(isBlank(lat) ? "latitude" : "longitude", "Enter both latitude and longitude, or clear both.");
+    }
+    if (!isBlank(lat) && !between(lat, -90, 90)) add("latitude", "Latitude must be between -90 and 90.");
+    if (!isBlank(lon) && !between(lon, -180, 180)) add("longitude", "Longitude must be between -180 and 180.");
+    if (!isBlank(alt)) {
+      if (isBlank(lat) || isBlank(lon)) add("altitude", "Altitude needs a latitude and longitude.");
+      else if (!between(alt, -12000, 100000)) add("altitude", "Altitude must be between -12,000 and 100,000 metres.");
+    }
+    return problems;
+  }
+
   Datum.examifSchema = schema;
+  Datum.validateFields = validateFields;
   Datum.ORIENTATION_OPTIONS = ORIENTATION_OPTIONS;
   Datum.CATEGORY_LABELS = CATEGORY_LABELS;
   Datum.EXIFR_KEY_MAP = EXIFR_KEY_MAP;

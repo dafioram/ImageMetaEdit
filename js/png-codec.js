@@ -97,6 +97,33 @@
     return serialize(chunks);
   }
 
+  // Structural check for load-time warnings. Reports the first problem
+  // found, in words: a chunk running past the end of the file, a missing
+  // end marker, or chunks whose checksums don't match their data.
+  function inspect(bytes) {
+    if (!isPNG(bytes)) return { problem: "it doesn't start with the PNG signature" };
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let offset = 8;
+    const badCrc = [];
+    while (offset < bytes.length) {
+      if (offset + 12 > bytes.length) {
+        return { problem: "it's cut off: the file ends " + (bytes.length - offset) + " bytes into a chunk header, before the end marker (IEND)" };
+      }
+      const length = view.getUint32(offset);
+      const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+      if (offset + 12 + length > bytes.length) {
+        return { problem: "it's cut off: its " + type + " chunk should hold " + length.toLocaleString("en-US") + " bytes but the file ends " + (bytes.length - offset - 8).toLocaleString("en-US") + " bytes in" };
+      }
+      const stored = view.getUint32(offset + 8 + length);
+      if (crc32(bytes.subarray(offset + 4, offset + 8 + length)) !== stored) badCrc.push(type);
+      offset += 12 + length;
+      if (type === "IEND") {
+        return badCrc.length ? { problem: badCrc.length + " of its chunks (" + Array.from(new Set(badCrc)).join(", ") + ") fail their checksum, so the data may be damaged" } : {};
+      }
+    }
+    return { problem: "it's cut off before its end marker (IEND)" };
+  }
+
   // XMP lives in an iTXt chunk with this keyword. Layout: keyword \0,
   // compression flag, compression method, language \0, translated keyword
   // \0, then the text (UTF-8, or zlib when the flag is 1).
@@ -144,5 +171,5 @@
     return serialize(chunks);
   }
 
-  Datum.pngCodec = { isPNG, parse, serialize, getExifChunkData, writeExifChunk, getXmp, replaceXmp };
+  Datum.pngCodec = { isPNG, parse, serialize, getExifChunkData, writeExifChunk, getXmp, replaceXmp, inspect };
 })(window.Datum = window.Datum || {});

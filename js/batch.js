@@ -44,7 +44,10 @@
     }
     const result = await Datum.model.getOutputBytesAsync(record);
     if (result.failed) {
-      Datum.ui.showToast("Couldn't export " + (record.outputName || record.file.name) + ": " + result.error + ". Nothing was downloaded.");
+      const name = record.outputName || record.file.name;
+      Datum.ui.showToast(result.invalid
+        ? "Can't download " + name + " yet: " + Datum.errors.trimSentence(result.error) + "."
+        : "Couldn't export " + name + ": " + Datum.errors.trimSentence(result.error) + ". Nothing was downloaded.");
       return result;
     }
     const { name, mime } = resolveNameAndMime(record, result);
@@ -52,7 +55,7 @@
     triggerDownload(blob, name);
 
     if (result.error) {
-      Datum.ui.showToast("Couldn't compress " + name + " -- downloaded at original quality instead.");
+      Datum.ui.showToast("Couldn't compress " + name + " (" + Datum.errors.trimSentence(result.error) + "), so it was downloaded at its original quality.");
     } else if (result.compressed && result.reachedTarget === false) {
       Datum.ui.showToast("Couldn't reach your target size even at low quality \u2014 saved as small as it would go. Try a smaller max dimension.");
     }
@@ -82,7 +85,7 @@
       const result = await Datum.model.getOutputBytesAsync(record);
       if (result.failed) {
         // Leave out only the file that failed; the rest of the archive is fine.
-        failedNames.push(record.outputName || record.file.name);
+        failedNames.push((record.outputName || record.file.name) + " (" + Datum.errors.trimSentence(result.error) + ")");
         continue;
       }
       const { name } = resolveNameAndMime(record, result);

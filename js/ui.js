@@ -54,7 +54,8 @@
     if (record.error) return "Couldn't read file";
     if (!record.supportsEdit) return "View only";
     const n = Datum.model.changedKeys(record).length;
-    return n > 0 ? (n + (n === 1 ? " change" : " changes")) : "No changes";
+    const changes = n > 0 ? (n + (n === 1 ? " change" : " changes")) : "No changes";
+    return record.warning ? "Damaged \u00B7 " + changes : changes;
   }
 
   function formatRawValue(v) {
@@ -188,6 +189,45 @@
     const diffCountEl = document.getElementById("diff-count");
     if (diffCountEl) updateDiffCountEl(diffCountEl, record);
     updateQueueItemStatus(record);
+    refreshValidity(record);
+  }
+
+  // Marks every field that can't be written, with the reason underneath.
+  // Recomputed as a whole because some rules span fields (latitude needs
+  // longitude, altitude needs both).
+  function refreshValidity(record) {
+    const byKey = {};
+    if (record.supportsEdit) {
+      for (const p of Datum.validateFields(record.fields)) if (!byKey[p.key]) byKey[p.key] = p.message;
+    }
+    document.querySelectorAll(".editor-panel .field[data-key]").forEach((fieldEl) => {
+      const key = fieldEl.getAttribute("data-key");
+      const input = fieldEl.querySelector("input, select");
+      if (!input) return;
+      let msg = fieldEl.querySelector(".field-error");
+      if (byKey[key]) {
+        if (!msg) {
+          msg = document.createElement("div");
+          msg.className = "field-error";
+          msg.id = "field-error-" + key;
+          fieldEl.appendChild(msg);
+        }
+        msg.textContent = byKey[key];
+        input.classList.add("invalid");
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute("aria-describedby", msg.id);
+      } else {
+        if (msg) msg.remove();
+        input.classList.remove("invalid");
+        input.removeAttribute("aria-invalid");
+        input.removeAttribute("aria-describedby");
+      }
+    });
+  }
+
+  function inRange(lat, lon) {
+    return lat !== "" && lon !== "" && lat !== undefined && lon !== undefined &&
+      isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
   }
 
   function updateDiffCountEl(el, record) {
@@ -321,7 +361,7 @@
       if (raw !== "") record.stripRequested = false;
       if (key === "latitude" || key === "longitude") {
         const lat = record.fields.latitude, lon = record.fields.longitude;
-        if (lat !== "" && lon !== "" && isFinite(lat) && isFinite(lon)) {
+        if (inRange(lat, lon)) {
           Datum.mapWidget.setPosition(lat, lon, { recenter: true, zoom: 12 });
         } else {
           Datum.mapWidget.setPosition(null, null);
@@ -340,6 +380,10 @@
     const lat = record.fields.latitude, lon = record.fields.longitude;
     if (lat === "" || lon === "" || lat === undefined || lon === undefined || !isFinite(lat) || !isFinite(lon)) {
       el.textContent = "No location set";
+      return;
+    }
+    if (!inRange(lat, lon)) {
+      el.textContent = "Out of range: latitude must be within \u00B190 and longitude within \u00B1180";
       return;
     }
     el.textContent = Datum.gps.formatDMS(Number(lat), true) + "   \u00B7   " + Datum.gps.formatDMS(Number(lon), false);
@@ -409,7 +453,7 @@
     grid.className = "field-grid";
     grid.appendChild(buildGpsNumberField("latitude", "Latitude", record, -90, 90));
     grid.appendChild(buildGpsNumberField("longitude", "Longitude", record, -180, 180));
-    grid.appendChild(buildGpsNumberField("altitude", "Altitude (meters)", record, -12000, 9000));
+    grid.appendChild(buildGpsNumberField("altitude", "Altitude (meters)", record, -12000, 100000));
     right.appendChild(grid);
 
     const actions = document.createElement("div");
@@ -506,7 +550,7 @@
     dimLabel.appendChild(document.createTextNode("Max dimension "));
     const dimInput = document.createElement("input");
     dimInput.type = "number";
-    dimInput.min = "100";
+    dimInput.min = "50";
     dimInput.step = "50";
     dimInput.placeholder = "no limit";
     dimInput.className = "compress-maxdim-input";
@@ -515,13 +559,35 @@
     dimLabel.appendChild(document.createTextNode(" px"));
     row.appendChild(dimLabel);
 
+    const hint = document.createElement("div");
+    hint.className = "compress-hint";
+    hint.setAttribute("role", "status");
+    row.appendChild(hint);
+
+    // An invalid entry is marked and explained, and the setting in use
+    // stays the last valid one; leaving the field puts that value back.
+    function markInvalid(input, message) {
+      input.classList.toggle("invalid", !!message);
+      if (message) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+      const other = input === targetInput ? dimInput : targetInput;
+      hint.textContent = message || (other.classList.contains("invalid") ? hint.textContent : "");
+    }
+
     toggle.addEventListener("change", () => {
       record.compressEnabled = toggle.checked;
       if (onToggle) onToggle();
     });
     targetInput.addEventListener("input", () => {
       const v = parseFloat(targetInput.value);
-      record.compressTarget = isFinite(v) && v > 0 ? v : Datum.model.compressUnit(record).default;
+      if (isFinite(v) && v > 0) {
+        record.compressTarget = v;
+        markInvalid(targetInput, null);
+      } else {
+        markInvalid(targetInput, "Enter a target size above 0. Still using " + record.compressTarget + " " + record.compressTargetUnit + ".");
+      }
+    });
+    targetInput.addEventListener("change", () => {
+      if (targetInput.classList.contains("invalid")) { syncTargetInput(); markInvalid(targetInput, null); }
     });
     unitSelect.addEventListener("change", () => {
       // Convert the current target so the actual size limit stays the same
@@ -534,8 +600,21 @@
       syncTargetInput();
     });
     dimInput.addEventListener("input", () => {
+      if (dimInput.value.trim() === "") {
+        record.compressMaxDimension = null;
+        markInvalid(dimInput, null);
+        return;
+      }
       const v = parseFloat(dimInput.value);
-      record.compressMaxDimension = isFinite(v) && v > 0 ? v : null;
+      if (isFinite(v) && v >= 50) {
+        record.compressMaxDimension = v;
+        markInvalid(dimInput, null);
+      } else {
+        markInvalid(dimInput, "Use 50 px or more, or leave max dimension empty for no limit.");
+      }
+    });
+    dimInput.addEventListener("change", () => {
+      if (dimInput.classList.contains("invalid")) { dimInput.value = record.compressMaxDimension || ""; markInvalid(dimInput, null); }
     });
 
     return row;
@@ -618,6 +697,12 @@
       notice.className = "notice warn";
       notice.textContent = record.error;
       summary.appendChild(notice);
+    }
+    if (record.warning) {
+      const warning = document.createElement("div");
+      warning.className = "notice warn";
+      warning.textContent = record.warning;
+      summary.appendChild(warning);
     }
     top.appendChild(summary);
     panel.appendChild(top);
@@ -702,12 +787,13 @@
 
     Datum.mapWidget.init("map");
     Datum.mapWidget.onClick((lat, lon) => setGpsFieldsFromMap(record, lat, lon));
-    if (record.fields.latitude !== "" && record.fields.longitude !== "" && record.fields.latitude !== undefined) {
+    if (inRange(record.fields.latitude, record.fields.longitude)) {
       Datum.mapWidget.setPosition(record.fields.latitude, record.fields.longitude, { recenter: true, zoom: 12 });
     } else {
       Datum.mapWidget.setPosition(null, null);
     }
     updateGpsReadout(record);
+    refreshValidity(record);
   }
 
   // ---------- Top-level render ----------
