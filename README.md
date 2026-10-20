@@ -124,17 +124,32 @@ correctly; HEIC metadata is extracted through that plus `piexifjs`
 instead of through exifr. (JPEG and PNG metadata still use exifr for
 reading, which works correctly for those formats.)
 
-**"Strip all metadata" limitations.** For JPEG this removes the entire
-EXIF segment (`piexif.remove`). For PNG it removes the `eXIf` chunk plus
-`tEXt`/`zTXt`/`iTXt`/`tIME` chunks. It does *not* currently remove other
-embedded blocks some JPEGs carry, like XMP or Photoshop IRB segments —
-these are rare in typical camera/phone photos but can exist in
-Photoshop-edited files.
+**What "Strip all metadata" removes.** For JPEG it keeps only what is
+needed to display the image exactly as before — the JFIF header, the ICC
+color profile and Adobe's color-transform flag — and removes everything
+else: EXIF, XMP (where Lightroom, Photoshop and Google Photos store their
+own copy of the location), IPTC/Photoshop blocks, comments, other
+vendor segments, and any data after the end of the image (such as HDR
+gain maps or depth images appended by some phones). For PNG it removes the
+`eXIf` chunk plus `tEXt`/`zTXt`/`iTXt`/`tIME` chunks. The one tag it keeps is
+the orientation: without it, a photo whose pixels are stored sideways (most
+phone photos) would display sideways. It holds no personal information.
 
-**Orientation is metadata-only.** Editing orientation changes the EXIF
-tag, not the pixels — consistent with the no-recompression guarantee for
-JPEG/PNG. Viewers that respect EXIF orientation (most modern ones) will
-display the photo correctly; a few older/simpler viewers may not.
+**XMP location stays in step with EXIF.** The editor shows the EXIF
+location. When you change or clear it, any copy of the location in XMP is
+removed too, so it can't contradict the new position or leak the old one;
+the rest of the XMP is kept. If a file has a location only in XMP, the
+editor says so.
+
+**Orientation.** Editing orientation changes the EXIF tag, not the pixels —
+consistent with the no-recompression guarantee for JPEG/PNG. Paths that
+re-encode pixels (compression, HEIC conversion) store them upright, already
+turned the way they should display, and write orientation "Normal", so the
+photo isn't rotated twice. HEIC conversion follows the HEIF rule that the
+container's own rotation applies and the EXIF tag does not.
+
+**Text in any language.** Text fields are stored as UTF-8, which current
+readers (phones, macOS, Windows, exiftool) display correctly.
 
 **Why compression always outputs JPEG, not WebP/AVIF.** PNG is lossless
 and a poor fit for photographic content size-wise; WebP and AVIF compress

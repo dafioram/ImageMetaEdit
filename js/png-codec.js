@@ -97,5 +97,52 @@
     return serialize(chunks);
   }
 
-  Datum.pngCodec = { isPNG, parse, serialize, getExifChunkData, writeExifChunk };
+  // XMP lives in an iTXt chunk with this keyword. Layout: keyword \0,
+  // compression flag, compression method, language \0, translated keyword
+  // \0, then the text (UTF-8, or zlib when the flag is 1).
+  const XMP_KEYWORD = "XML:com.adobe.xmp";
+
+  function isXmpChunk(c) {
+    if (c.type !== "iTXt") return false;
+    const n = XMP_KEYWORD.length;
+    if (c.data.length <= n || c.data[n] !== 0) return false;
+    return String.fromCharCode.apply(null, c.data.subarray(0, n)) === XMP_KEYWORD;
+  }
+
+  // { text, compressed } for the XMP chunk, or null if there is none.
+  // Compressed packets are reported without text.
+  function getXmp(bytes) {
+    const chunk = parse(bytes).find(isXmpChunk);
+    if (!chunk) return null;
+    const d = chunk.data;
+    let i = XMP_KEYWORD.length + 1;
+    const compressed = d[i] === 1;
+    i += 2;
+    while (i < d.length && d[i] !== 0) i++; // language tag
+    i++;
+    while (i < d.length && d[i] !== 0) i++; // translated keyword
+    i++;
+    return { text: compressed ? null : new TextDecoder("utf-8").decode(d.subarray(i)), compressed };
+  }
+
+  // Replaces the XMP chunk's text, or removes the chunk when text is null.
+  function replaceXmp(bytes, text) {
+    const chunks = parse(bytes);
+    const idx = chunks.findIndex(isXmpChunk);
+    if (idx === -1) return bytes;
+    if (text === null) {
+      chunks.splice(idx, 1);
+    } else {
+      const head = new TextEncoder().encode(XMP_KEYWORD);
+      const body = new TextEncoder().encode(text);
+      const data = new Uint8Array(head.length + 5 + body.length);
+      data.set(head, 0);
+      // keyword \0, uncompressed, method 0, empty language \0, empty translation \0
+      data.set(body, head.length + 5);
+      chunks[idx] = { type: "iTXt", data };
+    }
+    return serialize(chunks);
+  }
+
+  Datum.pngCodec = { isPNG, parse, serialize, getExifChunkData, writeExifChunk, getXmp, replaceXmp };
 })(window.Datum = window.Datum || {});

@@ -32,6 +32,26 @@
     return v === null || v === undefined || v === "" || (typeof v === "number" && isNaN(v));
   }
 
+  // EXIF text tags hold bytes, and piexif takes one JS char per byte. Text
+  // is written as UTF-8, which modern readers (exifr, exiftool, phones,
+  // macOS, Windows) decode correctly; writing JS char codes directly would
+  // mangle anything outside Latin-1 and store Latin-1 in a way UTF-8 readers
+  // show as garbage.
+  function textToExif(text) {
+    return bin.uint8ToBinaryString(new TextEncoder().encode(String(text)));
+  }
+
+  // Reverse of textToExif. Older files can hold Latin-1 bytes, which are not
+  // valid UTF-8; those are shown as Latin-1.
+  function exifToText(raw) {
+    const s = String(raw).replace(/\u0000+$/, "");
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bin.binaryStringToUint8(s));
+    } catch (e) {
+      return s;
+    }
+  }
+
   // Applies `fields` (the curated model, see metadata-model.js) onto an
   // existing exifObj in place. Returns the same object for convenience.
   function applyFieldsToExifObj(exifObj, fields) {
@@ -48,7 +68,7 @@
       }
       switch (def.type) {
         case "ascii":
-          ifd[def.tag] = String(value);
+          ifd[def.tag] = textToExif(value);
           break;
         case "int":
           ifd[def.tag] = Math.round(Number(value));
@@ -112,40 +132,77 @@
       Object.keys(exifObj["GPS"]).length === 0;
   }
 
+  // The only tag "Strip all metadata" keeps: without it, a phone photo whose
+  // pixels are stored sideways would be displayed sideways. It holds no
+  // personal information. Returns the EXIF binary string, or null when the
+  // orientation is normal and nothing needs to be written.
+  function orientationOnlyExif(fields) {
+    const o = Datum.orientation.normalize(fields && fields.orientation);
+    if (o === 1) return null;
+    return window.piexif.dump({ "0th": { [window.piexif.ImageIFD.Orientation]: o } });
+  }
+
+  // When the location was changed or cleared, the XMP copy of the old
+  // location must not survive. Returns the XMP text to keep (GPS removed),
+  // or null to drop the packet (it could not be parsed or edited).
+  function xmpWithoutGps(text) {
+    if (text === null || !Datum.xmp.hasGps(text)) return text;
+    return Datum.xmp.removeGps(text);
+  }
+
   // originalBytes: Uint8Array of the original JPEG. Returns a new Uint8Array.
-  function writeJpeg(originalBytes, fields, strip) {
-    const binaryStr = bin.uint8ToBinaryString(originalBytes);
+  // options.locationChanged: the user changed or cleared the GPS position.
+  function writeJpeg(originalBytes, fields, strip, options) {
     if (strip) {
-      const stripped = window.piexif.remove(binaryStr);
-      return bin.binaryStringToUint8(stripped);
+      const bare = Datum.jpegSegments.stripAllMetadata(originalBytes);
+      const exif = orientationOnlyExif(fields);
+      return exif ? bin.binaryStringToUint8(window.piexif.insert(exif, bin.uint8ToBinaryString(bare))) : bare;
     }
+    const binaryStr = bin.uint8ToBinaryString(originalBytes);
     const exifObj = loadExifObj(binaryStr);
     applyFieldsToExifObj(exifObj, fields);
-    if (exifObjIsEmpty(exifObj)) {
-      const stripped = window.piexif.remove(binaryStr);
-      return bin.binaryStringToUint8(stripped);
+    let out = exifObjIsEmpty(exifObj)
+      ? bin.binaryStringToUint8(window.piexif.remove(binaryStr))
+      : bin.binaryStringToUint8(window.piexif.insert(window.piexif.dump(exifObj), binaryStr));
+    if (options && options.locationChanged) {
+      const xmp = Datum.jpegSegments.readXmp(out);
+      if (xmp !== null) {
+        const kept = xmpWithoutGps(xmp);
+        if (kept !== xmp) out = Datum.jpegSegments.replaceXmp(out, kept);
+      }
     }
-    const exifBytes = window.piexif.dump(exifObj);
-    const newBinary = window.piexif.insert(exifBytes, binaryStr);
-    return bin.binaryStringToUint8(newBinary);
+    return out;
   }
 
   // originalBytes: Uint8Array of the original PNG. Returns a new Uint8Array.
-  function writePng(originalBytes, fields, strip) {
+  function writePng(originalBytes, fields, strip, options) {
     if (strip) {
-      return Datum.pngCodec.writeExifChunk(originalBytes, null, true);
+      const exif = orientationOnlyExif(fields);
+      return Datum.pngCodec.writeExifChunk(originalBytes, exif ? bin.binaryStringToUint8(exif.slice(6)) : null, true);
     }
     const existingTiff = Datum.pngCodec.getExifChunkData(originalBytes);
     const exifObj = existingTiff
       ? loadExifObj("Exif\0\0" + bin.uint8ToBinaryString(existingTiff))
       : emptyExifObj();
     applyFieldsToExifObj(exifObj, fields);
+    let out;
     if (exifObjIsEmpty(exifObj)) {
-      return Datum.pngCodec.writeExifChunk(originalBytes, null, false);
+      out = Datum.pngCodec.writeExifChunk(originalBytes, null, false);
+    } else {
+      const exifBytesBinary = window.piexif.dump(exifObj);
+      out = Datum.pngCodec.writeExifChunk(originalBytes, bin.binaryStringToUint8(exifBytesBinary.slice(6)), false);
     }
-    const exifBytesBinary = window.piexif.dump(exifObj);
-    const tiffOnly = bin.binaryStringToUint8(exifBytesBinary.slice(6));
-    return Datum.pngCodec.writeExifChunk(originalBytes, tiffOnly, false);
+    if (options && options.locationChanged) {
+      const xmp = Datum.pngCodec.getXmp(out);
+      if (xmp && xmp.compressed) {
+        // A compressed packet cannot be read or edited here, so it is dropped.
+        out = Datum.pngCodec.replaceXmp(out, null);
+      } else if (xmp) {
+        const kept = xmpWithoutGps(xmp.text);
+        if (kept !== xmp.text) out = Datum.pngCodec.replaceXmp(out, kept);
+      }
+    }
+    return out;
   }
 
   // Inverse of applyFieldsToExifObj: given a loaded exifObj (numeric-tag
@@ -165,7 +222,7 @@
       if (raw === undefined || raw === null) { fields[def.key] = ""; continue; }
       switch (def.type) {
         case "ascii":
-          fields[def.key] = stripNulls(raw);
+          fields[def.key] = exifToText(raw);
           break;
         case "int":
           fields[def.key] = Number(raw);
@@ -226,7 +283,7 @@
         const tagInfo = (px.TAGS[ifdName === "1st" ? "0th" : ifdName] || {})[tagNum];
         const name = tagInfo ? tagInfo.name : (ifdName + ":" + tagNum);
         let value = ifd[tagNum];
-        if (typeof value === "string") value = value.replace(/\u0000+$/, "");
+        if (typeof value === "string") value = exifToText(value);
         out[name] = value;
       }
     }
@@ -238,9 +295,26 @@
   // gets inserted into separately-supplied pixel bytes -- used by the
   // "reduce file size" pipeline, where the pixels come from a fresh
   // canvas re-encode rather than the original file.
-  function insertMergedExif(exifObj, fields, jpegPixelBytes, strip) {
+  //
+  // The pixels are new, so anything describing the old ones goes: the
+  // embedded thumbnail (it would still show the old framing, a known way
+  // cropped-out content leaks) and stale pixel dimensions. Orientation is
+  // taken from `fields`, which callers set to 1 because re-encoded pixels
+  // are stored upright (see orientation.js).
+  function prepareExifForNewPixels(exifObj, width, height) {
+    exifObj["1st"] = {};
+    exifObj.thumbnail = null;
+    if (width && height) {
+      exifObj["Exif"][window.piexif.ExifIFD.PixelXDimension] = width;
+      exifObj["Exif"][window.piexif.ExifIFD.PixelYDimension] = height;
+    }
+    return exifObj;
+  }
+
+  function insertMergedExif(exifObj, fields, jpegPixelBytes, strip, size) {
     const binaryStr = bin.uint8ToBinaryString(jpegPixelBytes);
-    if (strip) return bin.binaryStringToUint8(window.piexif.remove(binaryStr));
+    if (strip) return jpegPixelBytes;
+    prepareExifForNewPixels(exifObj, size && size.width, size && size.height);
     applyFieldsToExifObj(exifObj, fields);
     if (exifObjIsEmpty(exifObj)) return bin.binaryStringToUint8(window.piexif.remove(binaryStr));
     const exifBytes = window.piexif.dump(exifObj);
@@ -248,8 +322,17 @@
     return bin.binaryStringToUint8(newBinary);
   }
 
+  // Size in bytes of the EXIF segment insertMergedExif would add, so the
+  // compression target can leave room for it.
+  function mergedExifSize(exifObj, fields, size) {
+    const copy = prepareExifForNewPixels(JSON.parse(JSON.stringify(exifObj)), size && size.width, size && size.height);
+    applyFieldsToExifObj(copy, fields);
+    if (exifObjIsEmpty(copy)) return 0;
+    return window.piexif.dump(copy).length + 4;
+  }
+
   Datum.metadataWriter = {
     loadExifObj, applyFieldsToExifObj, exifObjIsEmpty, writeJpeg, writePng, emptyExifObj,
-    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif,
+    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif, mergedExifSize, textToExif, exifToText,
   };
 })(window.Datum = window.Datum || {});
