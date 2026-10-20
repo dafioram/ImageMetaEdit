@@ -61,7 +61,83 @@
     if (box.version !== undefined) return;
     const vflags = u32(view, box.start);
     box.version = vflags >>> 24;
+    box.flags = vflags & 0xffffff;
     box.start += 4;
+  }
+
+  function findMeta(view, bytes) {
+    let nextOffset = u32(view, 0);
+    let meta = parseBoxHead(view, nextOffset);
+    let guard = 0;
+    while (meta.kind !== "meta") {
+      nextOffset += meta.length;
+      if (nextOffset >= bytes.length - 8 || meta.length === 0 || guard++ > 64) return null;
+      meta = parseBoxHead(view, nextOffset);
+    }
+    readFullBoxHeader(view, meta);
+    return meta;
+  }
+
+  // HEIF display transforms as EXIF orientation values, so they can be
+  // composed and drawn with orientation.js. irot rotates anticlockwise in
+  // quarter turns; imir mirrors about a vertical (0) or horizontal (1) axis.
+  const IROT_TO_ORIENTATION = { 1: 8, 2: 3, 3: 6 };
+  const IMIR_TO_ORIENTATION = { 0: 2, 1: 4 };
+
+  // The primary image's stored size (ispe) and the orientation its display
+  // transforms (irot, imir) add up to, applied in association order.
+  // Returns null if the container can't be read.
+  function readPrimaryTransforms(bytes) {
+    try {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const meta = findMeta(view, bytes);
+      if (!meta) return null;
+      const subBoxes = parseBoxes(view, meta.start, meta.offset + meta.length);
+      const pitm = subBoxes.find((b) => b.kind === "pitm");
+      const iprp = subBoxes.find((b) => b.kind === "iprp");
+      if (!pitm || !iprp) return null;
+      readFullBoxHeader(view, pitm);
+      const primaryId = pitm.version === 0 ? u16(view, pitm.start) : u32(view, pitm.start);
+      const iprpChildren = parseBoxes(view, iprp.start, iprp.offset + iprp.length);
+      const ipco = iprpChildren.find((b) => b.kind === "ipco");
+      if (!ipco) return null;
+      const props = parseBoxes(view, ipco.start, ipco.offset + ipco.length);
+
+      const indices = [];
+      for (const ipma of iprpChildren.filter((b) => b.kind === "ipma")) {
+        readFullBoxHeader(view, ipma);
+        let offset = ipma.start;
+        const entries = u32(view, offset); offset += 4;
+        for (let i = 0; i < entries; i++) {
+          const itemId = ipma.version < 1 ? u16(view, offset) : u32(view, offset);
+          offset += ipma.version < 1 ? 2 : 4;
+          const count = u8(view, offset); offset += 1;
+          for (let k = 0; k < count; k++) {
+            const index = (ipma.flags & 1) ? (u16(view, offset) & 0x7fff) : (u8(view, offset) & 0x7f);
+            offset += (ipma.flags & 1) ? 2 : 1;
+            if (itemId === primaryId) indices.push(index);
+          }
+        }
+      }
+
+      const result = { width: null, height: null, orientation: 1 };
+      for (const index of indices) {
+        const prop = props[index - 1];
+        if (!prop) continue;
+        if (prop.kind === "ispe") {
+          result.width = u32(view, prop.start + 4);
+          result.height = u32(view, prop.start + 8);
+        } else if (prop.kind === "irot") {
+          const o = IROT_TO_ORIENTATION[u8(view, prop.start) & 3];
+          if (o) result.orientation = Datum.orientation.compose(result.orientation, o);
+        } else if (prop.kind === "imir") {
+          result.orientation = Datum.orientation.compose(result.orientation, IMIR_TO_ORIENTATION[u8(view, prop.start) & 1]);
+        }
+      }
+      return result;
+    } catch (e) {
+      return null;
+    }
   }
 
   // Returns raw TIFF-formatted bytes (Uint8Array, no "Exif\0\0" prefix) for
@@ -70,15 +146,8 @@
     try {
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-      let nextOffset = u32(view, 0);
-      let meta = parseBoxHead(view, nextOffset);
-      let guard = 0;
-      while (meta.kind !== "meta") {
-        nextOffset += meta.length;
-        if (nextOffset >= bytes.length - 8 || meta.length === 0 || guard++ > 64) return null;
-        meta = parseBoxHead(view, nextOffset);
-      }
-      readFullBoxHeader(view, meta);
+      const meta = findMeta(view, bytes);
+      if (!meta) return null;
       const subBoxes = parseBoxes(view, meta.start, meta.offset + meta.length);
       const iinf = subBoxes.find((b) => b.kind === "iinf");
       const iloc = subBoxes.find((b) => b.kind === "iloc");
@@ -147,5 +216,5 @@
     }
   }
 
-  Datum.heicBoxReader = { extractExifTiff };
+  Datum.heicBoxReader = { extractExifTiff, readPrimaryTransforms };
 })(window.Datum = window.Datum || {});
