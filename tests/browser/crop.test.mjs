@@ -13,6 +13,11 @@ const RED = [220, 30, 30], GREEN = [30, 200, 30], YELLOW = [230, 220, 30];
 async function openCrop(page) {
   await page.locator(".crop-open").click();
   await page.waitForSelector(".crop-overlay");
+  // The picture has to be on screen before it can be dragged on.
+  await page.waitForFunction(() => {
+    const img = document.querySelector(".crop-image");
+    return img && img.complete && img.naturalWidth > 0 && img.clientWidth > 0;
+  });
 }
 
 // Sets the crop through the dialog's number boxes, then applies it. Width

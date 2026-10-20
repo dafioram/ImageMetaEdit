@@ -126,7 +126,9 @@
     document.body.appendChild(overlay);
     s.overlay = overlay;
 
-    const scale = () => img.clientWidth / W;
+    // Display pixels per image pixel. Until the picture has laid out its
+    // width is 0; treating that as 1 keeps early input from producing NaN.
+    const scale = () => img.clientWidth / W || 1;
 
     function render() {
       const k = scale();
