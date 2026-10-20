@@ -47,6 +47,33 @@ appTest("cropping a rotated JPEG keeps the chosen region, upright, with its meta
   assert.equal(tags.Make, "Datum Test Cam");
 });
 
+appTest("a browser that hands over rotated JPEGs as stored still crops the region shown", async (s) => {
+  await addFixtures(s, ["photo-orient6.jpg"]);
+  // Imitate a decoder that ignores the EXIF rotation, as WebKit does for
+  // part of the canvas API, and a probe that reports it.
+  await s.page.evaluate(() => {
+    const load = Datum.compress.loadImageFromBytes;
+    Datum.compress.loadImageFromBytes = (bytes) => {
+      const exif = piexif.load(Datum.bin.uint8ToBinaryString(bytes));
+      exif["0th"][piexif.ImageIFD.Orientation] = 1;
+      return load(Datum.bin.binaryStringToUint8(piexif.insert(piexif.dump(exif), Datum.bin.uint8ToBinaryString(bytes))));
+    };
+    Datum.orientation.browserAppliesOrientation = async () => false;
+  });
+  await cropTo(s.page, { x: 150, y: 100, width: 150, height: 100 });
+  const out = await outputOf(s.page, 0);
+  assert.deepEqual(await decodedSize(s.page, out.b64, out.mime), { width: 150, height: 100 });
+  assert.ok(closeColor(await pixelAt(s.page, out.b64, out.mime, 75, 50), YELLOW), "the bottom-right quadrant is yellow");
+  const preview = await s.page.evaluate(() => Datum.app.getState().records[0].cropPreviewUrl);
+  const b64 = await s.page.evaluate(async (url) => {
+    const u8 = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    let bin = "";
+    for (let k = 0; k < u8.length; k++) bin += String.fromCharCode(u8[k]);
+    return btoa(bin);
+  }, preview);
+  assert.ok(closeColor(await pixelAt(s.page, b64, "image/jpeg", 10, 10), YELLOW), "the preview shows the same region");
+});
+
 appTest("a cropped PNG stays a lossless PNG with exact colours and its EXIF", async (s) => {
   await addFixtures(s, ["quadrants.png"]);
   await cropTo(s.page, { x: 150, y: 100, width: 150, height: 100 });
