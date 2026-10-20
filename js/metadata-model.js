@@ -184,6 +184,10 @@
           const exifObj = Datum.metadataWriter.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiffBytes));
           record.fields = Datum.metadataWriter.fieldsFromExifObj(exifObj);
           record.rawMetaPretty = Datum.metadataWriter.rawDumpFromExifObj(exifObj);
+          // The HEIF decoder already applied the container's rotation, and
+          // the HEIF spec says the EXIF tag is not applied on top. The
+          // converted pixels are the displayed image, so they are upright.
+          record.fields.orientation = 1;
         } else {
           record.fields = fieldsFromParsed(null);
           record.rawMetaPretty = {};
@@ -197,6 +201,9 @@
         record.rawMetaPretty = pretty || {};
         record.fields = fieldsFromParsed(strict);
         await loadDims(record, file);
+        if (record.fields.latitude === "" && Datum.xmp.hasGps(readXmpText(kind, bytes))) {
+          record.notice = "This file also stores a location in its XMP metadata, which the editor can't show. \"Strip all metadata\" removes it.";
+        }
       } else {
         record.previewUrl = URL.createObjectURL(file);
         record.notice = "This format isn't supported for metadata editing here. Showing basic file info only \u2014 it will pass through to the download unchanged.";
@@ -238,17 +245,36 @@
     record.stripRequested = false;
   }
 
+  // Clears every field except orientation: that tag only says which way up
+  // the stored pixels go, and dropping it would display photos sideways.
   function stripAll(record) {
     const cleared = {};
-    for (const k of Object.keys(record.fields)) cleared[k] = "";
+    for (const k of Object.keys(record.fields)) cleared[k] = k === "orientation" ? record.fields.orientation : "";
     record.fields = cleared;
     record.stripRequested = true;
   }
 
+  function readXmpText(kind, bytes) {
+    try {
+      if (kind === "jpeg") return Datum.jpegSegments.readXmp(bytes);
+      if (kind === "png") {
+        const x = Datum.pngCodec.getXmp(bytes);
+        return x ? x.text : null;
+      }
+    } catch (e) { /* not readable: nothing to report */ }
+    return null;
+  }
+
+  function locationChanged(record) {
+    const changed = changedKeys(record);
+    return changed.includes("latitude") || changed.includes("longitude") || changed.includes("altitude");
+  }
+
   function getOutputBytes(record) {
     if (!record.supportsEdit) return record.bytes;
-    if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested);
-    if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested);
+    const options = { locationChanged: locationChanged(record) };
+    if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested, options);
+    if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested, options);
     if (record.kind === "heic") return Datum.metadataWriter.writeJpeg(record.heicJpegBytes, record.fields, !!record.stripRequested);
     return record.bytes;
   }
@@ -299,6 +325,20 @@
     }
   }
 
+  // Decodes the record's pixels and returns a canvas in the orientation the
+  // user wants displayed (their orientation field applied), optionally
+  // capped to maxDimension on the longest side. Used by every path that
+  // re-encodes pixels; the output is then written with orientation 1.
+  async function uprightCanvas(record, pixelSource, exifObj, maxDimension) {
+    const img = await Datum.compress.loadImageFromBytes(pixelSource);
+    const canvas = Datum.compress.drawToCanvas(img, maxDimension);
+    // Converted HEIC pixels carry no tag; JPEG and PNG carry the original one.
+    const sourceKind = record.kind === "png" ? "png" : "jpeg";
+    const sourceTag = record.kind === "heic" ? 1 : (exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1);
+    const remaining = await Datum.orientation.remainingTransform(sourceKind, sourceTag, record.fields.orientation || 1);
+    return Datum.orientation.applyToCanvas(canvas, remaining);
+  }
+
   // Compression-aware output. Only actually recompresses when enabled AND
   // the source exceeds the target size -- files already under target are
   // left completely untouched, matching a normal export exactly.
@@ -313,13 +353,17 @@
       return plain.failed ? plain : Object.assign(plain, { skipped: true });
     }
     try {
-      const img = await Datum.compress.loadImageFromBytes(pixelSource);
-      const canvas = Datum.compress.drawToCanvas(img, record.compressMaxDimension || null);
-      const { blob, reachedTarget } = await Datum.compress.compressToTargetSize(canvas, targetBytes);
-      const pixelBytes = new Uint8Array(await blob.arrayBuffer());
       const exifObj = loadExifObjForRecord(record);
-      const finalBytes = Datum.metadataWriter.insertMergedExif(exifObj, record.fields, pixelBytes, record.stripRequested);
-      return { bytes: finalBytes, compressed: true, reachedTarget };
+      const canvas = await uprightCanvas(record, pixelSource, exifObj, record.compressMaxDimension || null);
+      const fields = Datum.orientation.fieldsForUprightPixels(record.fields);
+      const size = { width: canvas.width, height: canvas.height };
+      // The metadata is added after encoding, so the pixels get the target
+      // minus the metadata's size; otherwise output would overshoot.
+      const exifSize = record.stripRequested ? 0 : Datum.metadataWriter.mergedExifSize(exifObj, fields, size);
+      const { blob, reachedTarget } = await Datum.compress.compressToTargetSize(canvas, Math.max(1, targetBytes - exifSize));
+      const pixelBytes = new Uint8Array(await blob.arrayBuffer());
+      const finalBytes = Datum.metadataWriter.insertMergedExif(exifObj, fields, pixelBytes, record.stripRequested, size);
+      return { bytes: finalBytes, compressed: true, reachedTarget: reachedTarget && finalBytes.length <= targetBytes };
     } catch (e) {
       // Compression failed: fall back to a normal export, which is refused
       // (not sent unstripped) if it fails too.
@@ -331,7 +375,7 @@
   Datum.model = {
     detectKind, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
-    getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync,
+    getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas,
     COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };

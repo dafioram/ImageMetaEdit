@@ -13,9 +13,10 @@ const html = readFileSync(path.join(ROOT, "index.html"), "utf8");
 
 // Every absolute URL the shipped code may reference. Anything else is a
 // potential network dependency the app's privacy claim does not cover.
-// The w3.org entry is an XML namespace identifier, not a request.
-// Map tiles are the only network use, and only from OpenStreetMap.
-const ALLOWED_ORIGIN = /^(http:\/\/www\.w3\.org|https:\/\/[abc]\.tile\.openstreetmap\.org)$/;
+// The w3.org and ns.adobe.com entries are XML namespace identifiers (SVG,
+// XMP), not requests. Map tiles are the only network use, and only from
+// OpenStreetMap.
+const ALLOWED_ORIGIN = /^(http:\/\/www\.w3\.org|http:\/\/ns\.adobe\.com|https:\/\/[abc]\.tile\.openstreetmap\.org)$/;
 const TILE_TEMPLATE = /^https:\/\/\{s\}\.tile\.openstreetmap\.org\//;
 
 // Files that run in the page. README is documentation and vendor/ is

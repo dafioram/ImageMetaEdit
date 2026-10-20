@@ -352,3 +352,56 @@ export async function addRenamed(session, { as, mimeType, from }) {
     { timeout: 30000 }
   );
 }
+
+// RGBA of the displayed pixel at (x, y), after the browser applies the
+// file's orientation, exactly as a viewer would show it.
+export function pixelAt(page, base64, mime, x, y) {
+  return page.evaluate(
+    async ({ b64, mime, x, y }) => {
+      const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k);
+      const bmp = await createImageBitmap(new Blob([u8], { type: mime }));
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = c.getContext("2d");
+      g.drawImage(bmp, 0, 0);
+      bmp.close();
+      return Array.from(g.getImageData(x, y, 1, 1).data);
+    },
+    { b64: base64, mime, x, y }
+  );
+}
+
+// Named tags read with exifr, without value translation (Orientation is a
+// number). Missing tags are left out.
+export function readTags(page, base64, keys) {
+  return page.evaluate(
+    async ({ b64, keys }) => {
+      const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k);
+      const parsed = (await window.exifr.parse(u8, { tiff: true, ifd0: true, exif: true, gps: true, translateValues: false })) || {};
+      const out = {};
+      for (const key of keys) if (parsed[key] !== undefined) out[key] = parsed[key];
+      return out;
+    },
+    { b64: base64, keys }
+  );
+}
+
+// Size in bytes of the embedded EXIF thumbnail, or 0 if there is none.
+export function thumbnailSize(page, base64) {
+  return page.evaluate(async (b64) => {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k);
+    const thumb = await window.exifr.thumbnail(u8).catch(() => undefined);
+    return thumb ? thumb.byteLength || thumb.length : 0;
+  }, base64);
+}
+
+// True if each channel is within `tolerance` of the expected colour (JPEG
+// encoding shifts colours slightly).
+export function closeColor(rgba, rgb, tolerance = 40) {
+  return rgb.every((v, i) => Math.abs(rgba[i] - v) <= tolerance);
+}

@@ -5,7 +5,7 @@ The committed fixtures are the source of truth for the test suite; this
 script exists so they can be rebuilt or extended. Nothing here runs in CI.
 
     python3 -m venv .venv && . .venv/bin/activate
-    pip install pillow pillow-heif
+    pip install pillow pillow-heif piexif
     python3 tests/fixtures/generate.py
 
 Every photo is a synthetic scene with a fixed seed, so the output is stable
@@ -19,7 +19,9 @@ import zipfile
 from PIL import Image, ImageDraw, ImageFilter
 from PIL.ExifTags import IFD
 
+import piexif
 import pillow_heif
+from PIL import ImageCms
 
 pillow_heif.register_heif_opener()
 
@@ -75,6 +77,34 @@ def camera_exif():
     return exif
 
 
+def quadrants(width=300, height=200):
+    """Displayed image for orientation tests: red, green / blue, yellow."""
+    img = Image.new("RGB", (width, height))
+    d = ImageDraw.Draw(img)
+    w2, h2 = width // 2, height // 2
+    d.rectangle([0, 0, w2 - 1, h2 - 1], fill=(220, 30, 30))
+    d.rectangle([w2, 0, width - 1, h2 - 1], fill=(30, 200, 30))
+    d.rectangle([0, h2, w2 - 1, height - 1], fill=(30, 30, 220))
+    d.rectangle([w2, h2, width - 1, height - 1], fill=(230, 220, 30))
+    return img
+
+
+XMP_GPS = (
+    '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+    '<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
+    ' exif:GPSLatitude="37,46.494N" exif:GPSLongitude="122,25.164W" xmp:Rating="4">'
+    '<exif:GPSAltitude>12/1</exif:GPSAltitude>'
+    '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+)
+
+
+def insert_segment(jpeg, marker, payload):
+    """Inserts a JPEG marker segment right after SOI."""
+    seg = bytes([0xFF, marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
+    return jpeg[:2] + seg + jpeg[2:]
+
+
 def save(img, name, **kwargs):
     path = os.path.join(HERE, name)
     fmt = kwargs.pop("format", None)
@@ -104,6 +134,58 @@ def main():
     save(small, "sample.webp", format="WEBP", quality=90)
     save(small, "sample.tiff", format="TIFF")
     save(small, "sample.avif", format="AVIF", quality=60)
+
+
+    # Every kind of metadata a JPEG can hide, for "Strip all metadata":
+    # EXIF with GPS, XMP with GPS and a rating, a comment, IPTC (APP13) with
+    # a city, an ICC profile (kept by strip), and bytes after end-of-image.
+    buf = io.BytesIO()
+    srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    scene(320, 240, seed=8).save(buf, format="JPEG", quality=85, exif=camera_exif().tobytes(),
+                                 xmp=XMP_GPS.encode("utf-8"), comment=b"secret comment: 12 Home Street",
+                                 icc_profile=srgb)
+    iptc_city = b"\x1c\x02\x5a" + len(b"Paris").to_bytes(2, "big") + b"Paris"
+    irb = b"8BIM" + (0x0404).to_bytes(2, "big") + b"\x00\x00" + len(iptc_city).to_bytes(4, "big") + iptc_city + b"\x00"
+    data = insert_segment(buf.getvalue(), 0xED, b"Photoshop 3.0\x00" + irb) + b"TRAILING-SECRET-DATA"
+    with open(os.path.join(HERE, "privacy-extras.jpg"), "wb") as f:
+        f.write(data)
+    print("wrote privacy-extras.jpg")
+
+    # A location only in XMP: the editor cannot show it, so it warns.
+    scene(200, 150, seed=9).save(os.path.join(HERE, "xmp-only-gps.jpg"), format="JPEG", quality=85,
+                                 xmp=XMP_GPS.encode("utf-8"))
+    print("wrote xmp-only-gps.jpg")
+
+    # PNG with the location in both EXIF and XMP (uncompressed iTXt).
+    from PIL import PngImagePlugin
+    info = PngImagePlugin.PngInfo()
+    info.add_itxt("XML:com.adobe.xmp", XMP_GPS, zip=False)
+    save(scene(200, 150, seed=10), "png-xmp-gps.png", format="PNG", exif=camera_exif().tobytes(), pnginfo=info)
+
+    # Orientation: pixels stored sideways and tagged "rotate 90 CW", so the
+    # displayed image is quadrants() with red at the top left.
+    upright = quadrants()
+    stored = upright.transpose(Image.Transpose.ROTATE_90)  # 90 CCW
+    e6 = camera_exif()
+    e6[0x0112] = 6
+    save(stored, "photo-orient6.jpg", format="JPEG", quality=92, exif=e6.tobytes())
+    # HEIC stores the same rotation as a container transform (irot), which
+    # decoders apply; its EXIF tag says 6 as well, like phone photos.
+    save(stored, "photo-rotated.heic", format="HEIF", quality=90, exif=e6.tobytes())
+
+    # Non-ASCII EXIF text written as UTF-8, for the HEIC read path.
+    utf8 = piexif.dump({"0th": {piexif.ImageIFD.ImageDescription: "Zoë Ω 日本 📷".encode("utf-8"),
+                                piexif.ImageIFD.Make: b"Datum Test Cam"}})
+    save(scene(200, 150, seed=11), "utf8-text.heic", format="HEIF", quality=85, exif=utf8)
+
+    # EXIF thumbnail that shows a different picture from the main image,
+    # like a photo edited without updating its thumbnail. Re-encoded output
+    # must drop it: it would reveal the old framing.
+    thumb = io.BytesIO()
+    Image.new("RGB", (160, 120), (250, 0, 250)).save(thumb, format="JPEG", quality=80)
+    with_thumb = piexif.dump({"0th": {piexif.ImageIFD.Make: b"Datum Test Cam"},
+                              "1st": {piexif.ImageIFD.Compression: 6}, "thumbnail": thumb.getvalue()})
+    save(scene(1200, 900, seed=12), "photo-thumbnail.jpg", format="JPEG", quality=92, exif=with_thumb)
 
     # Damaged input: a real JPEG cut off partway through.
     full = open(os.path.join(HERE, "photo-exif.jpg"), "rb").read()
