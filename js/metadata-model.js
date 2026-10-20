@@ -177,6 +177,26 @@
     return Math.round(v * unit.bytes);
   }
 
+  // What re-encoding to JPEG would lose, found from the file's structure:
+  // transparency (PNG alpha or tRNS, AVIF alpha item) and animation (APNG,
+  // AVIF image sequences). JPEG holds neither, so the person is told.
+  function lossyTraits(kind, bytes) {
+    const traits = { hasAlpha: false, animated: false };
+    try {
+      if (kind === "png") {
+        const types = Datum.pngCodec.parse(bytes).map((c) => c.type);
+        const colorType = bytes[25];
+        traits.hasAlpha = colorType === 4 || colorType === 6 || types.includes("tRNS");
+        traits.animated = types.includes("acTL");
+      } else if (kind === "avif") {
+        const head = Datum.bin.uint8ToBinaryString(bytes.subarray(0, Math.min(bytes.length, 4096)));
+        traits.hasAlpha = head.indexOf("auxiliary:alpha") !== -1;
+        traits.animated = head.slice(8, 12) === "avis";
+      }
+    } catch (e) { /* unreadable structure: nothing to report */ }
+    return traits;
+  }
+
   async function createFileRecord(file) {
     const id = "f" + (++idCounter) + "_" + Date.now().toString(36);
     const bytes = await Datum.bin.fileToUint8Array(file);
@@ -212,7 +232,10 @@
       notice: null,
       warning: null,
       dims: { width: null, height: null },
+      hasAlpha: false,
+      animated: false,
     };
+    Object.assign(record, lossyTraits(kind, bytes));
 
     // Files that can't be an image at all are flagged now, with what is
     // known, rather than failing later at download.
@@ -258,7 +281,9 @@
           record.originalFields = {};
           return record;
         }
-        record.notice = label + " files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg.";
+        record.notice = label + " files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg." +
+          (record.hasAlpha ? " Transparent areas become white, since JPEG has no transparency." : "") +
+          (record.animated ? " Only the first frame is kept; JPEG can't hold an animation." : "");
         record.dims.width = canvas.width;
         record.dims.height = canvas.height;
         record.convertedJpegBytes = await Datum.heic.canvasToJpegBytes(canvas, 0.92);
@@ -443,6 +468,26 @@
   // Compression-aware output. Only actually recompresses when enabled AND
   // the source exceeds the target size -- files already under target are
   // left completely untouched, matching a normal export exactly.
+  // Whether a download right now would actually recompress: compression is
+  // on and the file is over the target. Files already under it are saved
+  // as they are.
+  function willCompress(record) {
+    if (!record.supportsEdit || !record.compressEnabled) return false;
+    const source = getPixelSourceBytes(record);
+    return !!source && source.length > targetBytesFor(record);
+  }
+
+  // Short notes for the compression controls: what the compressed JPEG
+  // will lose, or that nothing will be compressed.
+  function compressionNotes(record) {
+    if (!record.supportsEdit || !record.compressEnabled) return [];
+    if (!willCompress(record)) return ["This file is already under the target size, so it's saved as it is."];
+    const notes = [];
+    if (record.kind === "png" && record.hasAlpha) notes.push("Transparent areas become white, since JPEG has no transparency.");
+    if (record.kind === "png" && record.animated) notes.push("Only the first frame is kept; JPEG can't hold an animation.");
+    return notes;
+  }
+
   // What has to be fixed before this record can be written, as one
   // clause ("ISO must be ...; Latitude must be ..."), or null.
   function validationError(record) {
@@ -488,6 +533,7 @@
     detectKind, isConverted, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
     getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas, validationError,
+    willCompress, compressionNotes,
     COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };

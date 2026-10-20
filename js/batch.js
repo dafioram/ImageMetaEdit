@@ -17,25 +17,25 @@
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
 
-  function withJpegExtension(name) {
-    if (/\.jpe?g$/i.test(name)) return name;
-    const dot = name.lastIndexOf(".");
-    const base = dot > -1 ? name.slice(0, dot) : name;
-    return base + ".jpg";
-  }
-
   // Compression always outputs JPEG regardless of source format, so the
-  // filename/MIME need to reflect that only when it actually happened --
-  // never mutates record.outputName itself, so turning compression back
-  // off gives you your original name back.
+  // name and MIME type follow the bytes actually produced. record.outputName
+  // itself is never changed, so turning compression back off gives the
+  // original name back.
+  const EXTENSIONS_FOR_MIME = { "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] };
+  const IMAGE_EXTENSION = /\.(jpe?g|png|heic|heif|avif|gif|webp|bmp|tiff?)$/i;
+
+  // The download name always matches the data: a JPEG is never saved as
+  // ".png" just because that's what was typed. A wrong image extension is
+  // replaced; a missing one is added. `corrected` names the typed extension
+  // that was replaced, so the person can be told.
   function resolveNameAndMime(record, result) {
-    let name = record.outputName || record.file.name;
-    let mime = Datum.model.getOutputMime(record);
-    if (result.compressed) {
-      name = withJpegExtension(name);
-      mime = "image/jpeg";
-    }
-    return { name, mime };
+    const typed = record.outputName || record.file.name;
+    const mime = result.compressed ? "image/jpeg" : Datum.model.getOutputMime(record);
+    const exts = EXTENSIONS_FOR_MIME[mime];
+    if (!exts || exts.some((e) => typed.toLowerCase().endsWith(e))) return { name: typed, mime, corrected: null };
+    const wrong = IMAGE_EXTENSION.exec(typed);
+    const base = wrong ? typed.slice(0, wrong.index) : typed;
+    return { name: (base || "photo") + exts[0], mime, corrected: wrong ? wrong[0] : null };
   }
 
   async function downloadSingle(record) {
@@ -50,9 +50,12 @@
         : "Couldn't export " + name + ": " + Datum.errors.trimSentence(result.error) + ". Nothing was downloaded.");
       return result;
     }
-    const { name, mime } = resolveNameAndMime(record, result);
+    const { name, mime, corrected } = resolveNameAndMime(record, result);
     const blob = new Blob([result.bytes], { type: mime });
     triggerDownload(blob, name);
+    if (corrected) {
+      Datum.ui.showToast("Saved as " + name + ": the file is a " + (mime === "image/png" ? "PNG" : "JPEG") + ", so the " + corrected + " ending was corrected.");
+    }
 
     if (result.error) {
       Datum.ui.showToast("Couldn't compress " + name + " (" + Datum.errors.trimSentence(result.error) + "), so it was downloaded at its original quality.");

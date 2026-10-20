@@ -327,18 +327,21 @@ export async function downloadFrom(page, trigger, timeout = 30000) {
   return { name: download.suggestedFilename(), bytes: readFileSync(saved) };
 }
 
-// Waits for a toast whose text matches `pattern` (the first toast is often a
-// "working on it" message, so waiting for any text would race).
+// Waits for a toast whose text matches `pattern` and returns that toast's
+// text. Toasts stack, so this picks the newest matching one rather than the
+// text of the whole stack.
 export async function toastText(page, pattern = /./) {
-  await page.waitForFunction(
+  const handle = await page.waitForFunction(
     (source) => {
-      const el = document.getElementById("toast");
-      return !!el && new RegExp(source).test(el.textContent);
+      const re = new RegExp(source);
+      const items = Array.from(document.querySelectorAll("#toast .toast")).reverse();
+      const hit = items.find((el) => re.test(el.textContent));
+      return hit ? hit.textContent : false;
     },
     pattern.source,
     { timeout: 30000 }
   );
-  return page.locator("#toast").textContent();
+  return handle.jsonValue();
 }
 
 // Uploads a fixture under a different name, as if the person had renamed it.

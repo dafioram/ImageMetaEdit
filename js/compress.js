@@ -31,7 +31,12 @@
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
-    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+    const ctx = canvas.getContext("2d");
+    // JPEG has no transparency: paint white first, or transparent areas
+    // would encode as black.
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
     if (typeof img.src === "string" && img.src.indexOf("blob:") === 0) URL.revokeObjectURL(img.src);
     return canvas;
   }

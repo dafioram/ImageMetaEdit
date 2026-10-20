@@ -20,7 +20,11 @@
     const canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
-    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const ctx = canvas.getContext("2d");
+    // Converted to JPEG, which has no transparency: white, not black.
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
     return canvas;
   }
