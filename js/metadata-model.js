@@ -23,7 +23,20 @@
     if (type === "image/jpeg" || type === "image/jpg" || /\.(jpe?g)$/.test(name)) return "jpeg";
     if (type === "image/png" || /\.png$/.test(name)) return "png";
     if (type === "image/heic" || type === "image/heif" || /\.(heic|heif)$/.test(name)) return "heic";
+    if (type === "image/avif" || /\.avif$/.test(name)) return "avif";
     return "other";
+  }
+
+  // Formats edited by converting to JPEG: the browser can show and write
+  // JPEG, but can't write these containers. Both are HEIF-family files, so
+  // their EXIF is read with the same box reader.
+  const CONVERTED = {
+    heic: { label: "HEIC", decode: (bytes) => Datum.heic.decodeToCanvas(bytes) },
+    avif: { label: "AVIF", decode: (bytes) => Datum.avif.decodeToCanvas(bytes) },
+  };
+
+  function isConverted(kind) {
+    return Object.prototype.hasOwnProperty.call(CONVERTED, kind);
   }
 
   // Formats identified from the first bytes of the file. The name and MIME
@@ -41,7 +54,7 @@
     { kind: "other", label: "BMP", exts: [".bmp"], test: (b) => ascii(b, 0, 2) === "BM" },
     { kind: "other", label: "WebP", exts: [".webp"], test: (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP" },
     { kind: "other", label: "TIFF", exts: [".tif", ".tiff"], test: (b) => ascii(b, 0, 4) === "II*\0" || ascii(b, 0, 4) === "MM\0*" },
-    { kind: "other", label: "AVIF", exts: [".avif"], test: (b) => ascii(b, 4, 8) === "ftyp" && ascii(b, 8, 12) === "avif" },
+    { kind: "avif", label: "AVIF", exts: [".avif"], test: (b) => ascii(b, 4, 8) === "ftyp" && ["avif", "avis"].includes(ascii(b, 8, 12)) },
   ];
 
   // Returns the SIGNATURES entry the bytes match, or null if none match.
@@ -183,13 +196,13 @@
 
     const record = {
       id, file, kind, bytes,
-      heicJpegBytes: null,
+      convertedJpegBytes: null,
       previewUrl: null,
       rawMetaPretty: {},
       fields: {},
       originalFields: {},
       outputName: mismatchNotice ? withExtension(file.name, sniffed.exts[0]) : file.name,
-      supportsEdit: kind === "jpeg" || kind === "png" || kind === "heic",
+      supportsEdit: kind === "jpeg" || kind === "png" || isConverted(kind),
       stripRequested: false,
       compressEnabled: false,
       compressTarget: COMPRESS_UNITS.MB.default,
@@ -231,25 +244,39 @@
     record.warning = structure.warning || null;
 
     try {
-      if (kind === "heic") {
-        record.notice = "HEIC files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg.";
-        const canvas = await Datum.heic.decodeToCanvas(bytes);
+      if (isConverted(kind)) {
+        const label = CONVERTED[kind].label;
+        let canvas;
+        try {
+          canvas = await CONVERTED[kind].decode(bytes);
+        } catch (e) {
+          if (!e.unsupported) throw e;
+          // No decoder in this browser: the file can still be kept as is.
+          record.kind = "other";
+          record.supportsEdit = false;
+          record.notice = e.message + ", so this file is shown as a file only. It will download unchanged.";
+          record.originalFields = {};
+          return record;
+        }
+        record.notice = label + " files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg.";
         record.dims.width = canvas.width;
         record.dims.height = canvas.height;
-        record.heicJpegBytes = await Datum.heic.canvasToJpegBytes(canvas, 0.92);
-        record.previewUrl = canvas.toDataURL("image/jpeg", 0.85);
+        record.convertedJpegBytes = await Datum.heic.canvasToJpegBytes(canvas, 0.92);
+        // The converted JPEG doubles as the preview, so no second
+        // full-size copy (a base64 data URL) is kept in memory.
+        record.previewUrl = URL.createObjectURL(new Blob([record.convertedJpegBytes], { type: "image/jpeg" }));
         const base = file.name.replace(/\.[^.]+$/, "");
         record.outputName = (base || "photo") + ".jpg";
 
-        // HEIC metadata goes through our own box reader + piexif rather
-        // than exifr -- see heic-box-reader.js for why.
+        // EXIF goes through our own box reader + piexif rather than exifr --
+        // see heic-box-reader.js for why. AVIF uses the same container.
         const tiffBytes = Datum.heicBoxReader.extractExifTiff(bytes);
         if (tiffBytes) {
           const exifObj = Datum.metadataWriter.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiffBytes));
           record.fields = Datum.metadataWriter.fieldsFromExifObj(exifObj);
           record.rawMetaPretty = Datum.metadataWriter.rawDumpFromExifObj(exifObj);
-          // The HEIF decoder already applied the container's rotation, and
-          // the HEIF spec says the EXIF tag is not applied on top. The
+          // The decoder already applied the container's rotation, and the
+          // HEIF/AVIF specs say the EXIF tag is not applied on top. The
           // converted pixels are the displayed image, so they are upright.
           record.fields.orientation = 1;
         } else {
@@ -342,12 +369,12 @@
     const options = { locationChanged: locationChanged(record) };
     if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested, options);
     if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested, options);
-    if (record.kind === "heic") return Datum.metadataWriter.writeJpeg(record.heicJpegBytes, record.fields, !!record.stripRequested);
+    if (isConverted(record.kind)) return Datum.metadataWriter.writeJpeg(record.convertedJpegBytes, record.fields, !!record.stripRequested);
     return record.bytes;
   }
 
   function getOutputMime(record) {
-    if (record.kind === "jpeg" || record.kind === "heic") return "image/jpeg";
+    if (record.kind === "jpeg" || isConverted(record.kind)) return "image/jpeg";
     if (record.kind === "png") return "image/png";
     return record.file.type || "application/octet-stream";
   }
@@ -356,7 +383,7 @@
   // regardless of source format -- for HEIC that's the already-decoded
   // JPEG we made at load time, not the original container.
   function getPixelSourceBytes(record) {
-    if (record.kind === "heic") return record.heicJpegBytes;
+    if (isConverted(record.kind)) return record.convertedJpegBytes;
     if (record.kind === "jpeg" || record.kind === "png") return record.bytes;
     return null;
   }
@@ -374,7 +401,7 @@
       const tiff = Datum.pngCodec.getExifChunkData(record.bytes);
       return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
     }
-    if (record.kind === "heic") {
+    if (isConverted(record.kind)) {
       const tiff = Datum.heicBoxReader.extractExifTiff(record.bytes);
       return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
     }
@@ -397,11 +424,18 @@
   // capped to maxDimension on the longest side. Used by every path that
   // re-encodes pixels; the output is then written with orientation 1.
   async function uprightCanvas(record, pixelSource, exifObj, maxDimension) {
+    if (isConverted(record.kind)) {
+      // Decode the original again rather than the converted JPEG, so the
+      // pixels are lossy-encoded once, not twice. The decoded image is
+      // already the displayed one; only the user's orientation is applied.
+      const decoded = await CONVERTED[record.kind].decode(record.bytes);
+      const canvas = Datum.compress.drawToCanvas(decoded, maxDimension);
+      return Datum.orientation.applyToCanvas(canvas, Datum.orientation.normalize(record.fields.orientation || 1));
+    }
     const img = await Datum.compress.loadImageFromBytes(pixelSource);
     const canvas = Datum.compress.drawToCanvas(img, maxDimension);
-    // Converted HEIC pixels carry no tag; JPEG and PNG carry the original one.
     const sourceKind = record.kind === "png" ? "png" : "jpeg";
-    const sourceTag = record.kind === "heic" ? 1 : (exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1);
+    const sourceTag = exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1;
     const remaining = await Datum.orientation.remainingTransform(sourceKind, sourceTag, record.fields.orientation || 1);
     return Datum.orientation.applyToCanvas(canvas, remaining);
   }
@@ -451,7 +485,7 @@
   }
 
   Datum.model = {
-    detectKind, createFileRecord, changedKeys, resetAll, stripAll,
+    detectKind, isConverted, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
     getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas, validationError,
     COMPRESS_UNITS, compressUnit, targetBytesFor,

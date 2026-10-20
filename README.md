@@ -52,6 +52,7 @@ until they are fixed.
 | JPEG | Full read/write. Only the EXIF segment is touched — pixel data is never re-encoded, so there's no quality loss. |
 | PNG | Full read/write via the `eXIf` chunk (part of the PNG spec since 2017). Same no-recompression guarantee. |
 | HEIC/HEIF | Read + preview natively. Editing requires converting to JPEG first (see below) — you'll see an explicit notice before this happens. |
+| AVIF | Read + preview through the browser's own decoder, converted to JPEG for editing like HEIC. Browsers can't write AVIF, so edited files are saved as `.jpg`; without an AVIF decoder (some older browsers) the file is kept as is. |
 | Anything else | Basic file info only (name, size, dimensions). Passed through unchanged on download. |
 
 Editable fields: camera make/model/lens, aperture, shutter speed, ISO,
@@ -121,6 +122,11 @@ surgery, HEIC files are decoded and re-encoded as JPEG for editing. This
 does mean a small quality loss (HEVC→JPEG is lossy-to-lossy) and any
 depth-map/HDR gain-map data is dropped — you're shown this before it
 happens, not after.
+
+**Converted formats keep one generation of loss.** HEIC and AVIF are
+decoded once to show and convert them. When "Reduce file size" is on, the
+compressed file is encoded from a fresh decode of the original, not from
+the converted JPEG, so the image is lossy-encoded once rather than twice.
 
 **HEIC metadata reads through a custom parser, not exifr.** While building
 this, I found that the bundled `exifr` library's HEIC/HEIF parser has a

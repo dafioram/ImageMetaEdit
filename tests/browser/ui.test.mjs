@@ -12,7 +12,7 @@ appTest("first load shows the dropzone and accepts every supported type", async 
   const heading = await s.page.locator("#dropzone h2").textContent();
   assert.equal(heading, "Drop a photo here");
   const accept = await s.page.locator("#file-input").getAttribute("accept");
-  for (const type of [".heic", ".heif", "image/jpeg", "image/png", ".zip"]) {
+  for (const type of [".heic", ".heif", ".avif", "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", ".tiff", ".zip"]) {
     assert.ok(accept.includes(type), `file input should accept ${type}`);
   }
   assert.equal(await s.page.locator(".queue-item").count(), 0);

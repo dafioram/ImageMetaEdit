@@ -3,7 +3,7 @@
 // (everything else, passed through unchanged).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { appTest, addFixtures, addRenamed, records, toastText, outputOf, readExif, bytesOf, isJpeg, fixture } from "../helpers/app.mjs";
+import { appTest, addFixtures, addRenamed, records, toastText, outputOf, readExif, bytesOf, isJpeg, fixture, canDecodeAvif } from "../helpers/app.mjs";
 
 const EDITABLE = [
   { file: "photo-exif.jpg", kind: "jpeg", note: "JPEG with camera, date, GPS EXIF" },
@@ -12,6 +12,8 @@ const EDITABLE = [
   { file: "photo-noexif.png", kind: "png", note: "PNG with no metadata" },
   { file: "photo-exif.heic", kind: "heic", note: "HEIC with camera, date, GPS EXIF" },
   { file: "photo-noexif.heif", kind: "heic", note: "HEIF with the .heif extension and no EXIF" },
+  { file: "photo-exif.avif", kind: "avif", note: "AVIF with camera and GPS EXIF", needsAvif: true },
+  { file: "sample.avif", kind: "avif", note: "AVIF with no EXIF", needsAvif: true },
 ];
 
 const VIEW_ONLY = [
@@ -19,11 +21,11 @@ const VIEW_ONLY = [
   { file: "sample.bmp", note: "BMP" },
   { file: "sample.webp", note: "WebP" },
   { file: "sample.tiff", note: "TIFF (Chromium cannot decode it, so no dimensions)" },
-  { file: "sample.avif", note: "AVIF" },
 ];
 
-for (const { file, kind, note } of EDITABLE) {
-  appTest(`editable ${kind}: ${note} (${file})`, async (s) => {
+for (const { file, kind, note, needsAvif } of EDITABLE) {
+  appTest(`editable ${kind}: ${note} (${file})`, async (s, t) => {
+    if (needsAvif && !(await canDecodeAvif(s.page))) return t.skip("this browser has no AVIF decoder");
     await addFixtures(s, [file]);
     const [r] = await records(s.page);
     assert.equal(r.kind, kind, "detected kind");

@@ -21,7 +21,8 @@
 
   // maxDimension: longest side, in pixels; null/0/NaN means no resize.
   function drawToCanvas(img, maxDimension) {
-    let w = img.naturalWidth, h = img.naturalHeight;
+    // An <img> reports naturalWidth; a canvas or ImageBitmap reports width.
+    let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
     if (maxDimension && isFinite(maxDimension) && maxDimension >= 50 && Math.max(w, h) > maxDimension) {
       const scale = maxDimension / Math.max(w, h);
       w = Math.max(1, Math.round(w * scale));
@@ -31,7 +32,7 @@
     canvas.width = w;
     canvas.height = h;
     canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-    if (img.src && img.src.indexOf("blob:") === 0) URL.revokeObjectURL(img.src);
+    if (typeof img.src === "string" && img.src.indexOf("blob:") === 0) URL.revokeObjectURL(img.src);
     return canvas;
   }
 
