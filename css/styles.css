@@ -131,7 +131,7 @@ a:focus-visible,
   border-radius: var(--radius-lg);
   padding: 7px 12px;
   background: var(--panel-2);
-  white-space: nowrap;
+  max-width: 100%;
 }
 .privacy-note .dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -243,8 +243,12 @@ a:focus-visible,
   align-items: start;
 }
 
+/* Grid items default to min-width: auto, which lets wide content (a row of
+   queued files on a phone) stretch the column past the screen. With 0 the
+   queue scrolls sideways inside its panel instead. */
+.workspace > * { min-width: 0; }
 @media (max-width: 860px) {
-  .workspace { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Queue rail */
@@ -659,16 +663,30 @@ table.raw-table tr:last-child td { border-bottom: none; }
 .compress-row input.invalid { border-color: var(--flag); }
 .compress-hint { width: 100%; font-size: 11.5px; color: var(--flag); }
 .compress-hint:empty { display: none; }
+.compress-notes { width: 100%; font-size: 11.5px; color: var(--paper-dim); }
+.compress-notes:empty { display: none; }
+.compress-row input.compress-maxdim-input { width: 92px; }
 .diff-count { font-size: 12.5px; color: var(--paper-dim); }
 .diff-count b { color: var(--changed); font-weight: 600; }
 
 /* Toast */
 
-.toast {
+.toast-stack {
   position: fixed;
   bottom: 22px;
   left: 50%;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  z-index: 50;
+  pointer-events: none;
+}
+.toast {
+  transform: translateY(0);
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--paper);
@@ -683,7 +701,7 @@ table.raw-table tr:last-child td { border-bottom: none; }
 }
 .toast.show {
   opacity: 1;
-  transform: translateX(-50%) translateY(-6px);
+  transform: translateY(-6px);
 }
 
 footer.credits {

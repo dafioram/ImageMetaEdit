@@ -10,6 +10,21 @@
   };
 
   function getState() { return state; }
+
+  // Two files with the same name (the same photo added twice, or two
+  // folders in a zip) get "name (2).jpg" when added, so the queue, messages
+  // and downloads can tell them apart. Matching ignores case.
+  function uniqueOutputName(name) {
+    const taken = new Set(state.records.map((r) => (r.outputName || "").toLowerCase()));
+    if (!taken.has(name.toLowerCase())) return name;
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : "";
+    for (let n = 2; ; n++) {
+      const candidate = base + " (" + n + ")" + ext;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+  }
   function getActive() { return state.records.find((r) => r.id === state.activeId) || null; }
 
   async function addFiles(fileList) {
@@ -23,6 +38,7 @@
     for (const file of files) {
       try {
         const record = await Datum.model.createFileRecord(file);
+        record.outputName = uniqueOutputName(record.outputName);
         state.records.push(record);
         if (!state.activeId) state.activeId = record.id;
         successCount++;

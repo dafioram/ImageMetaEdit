@@ -179,6 +179,16 @@ def main():
     save(scene(640, 480, seed=13), "photo-exif.avif", format="AVIF", quality=70, exif=camera_exif().tobytes())
     save(stored, "photo-rotated.avif", format="AVIF", quality=80, exif=e6.tobytes())
 
+    # Re-encoding to JPEG loses transparency and animation; the app says so.
+    # Distinct frames: Pillow merges identical ones into a still image.
+    frames = [quadrants(120, 80).rotate(180 * i).convert("RGBA") for i in range(3)]
+    frames[0].save(os.path.join(HERE, "animated.png"), format="PNG", save_all=True,
+                   append_images=frames[1:], duration=200, loop=0)
+    print("wrote animated.png")
+    see_through = Image.new("RGBA", (160, 120), (0, 0, 0, 0))
+    ImageDraw.Draw(see_through).rectangle([0, 0, 79, 119], fill=(220, 30, 30, 255))
+    save(see_through, "transparent.avif", format="AVIF", quality=90)
+
     # Non-ASCII EXIF text written as UTF-8, for the HEIC read path.
     utf8 = piexif.dump({"0th": {piexif.ImageIFD.ImageDescription: "Zoë Ω 日本 📷".encode("utf-8"),
                                 piexif.ImageIFD.Make: b"Datum Test Cam"}})

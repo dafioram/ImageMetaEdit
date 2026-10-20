@@ -8,20 +8,37 @@
 (function (Datum) {
   "use strict";
 
-  let toastTimer = null;
+  // The editor tab stays open across re-renders (batch actions, switching
+  // files), so applying a location to all files doesn't bounce the person
+  // back to "Common fields".
+  let activeTab = "common";
 
+  // Toasts stack, newest last, so one message never replaces another before
+  // it can be read. A "working" message (ending in an ellipsis) is replaced
+  // by whatever comes next. At most four are shown at once.
   function showToast(message) {
-    let el = document.getElementById("toast");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "toast";
-      el.className = "toast";
-      document.body.appendChild(el);
+    let stack = document.getElementById("toast");
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.id = "toast";
+      stack.className = "toast-stack";
+      stack.setAttribute("role", "status");
+      stack.setAttribute("aria-live", "polite");
+      document.body.appendChild(stack);
     }
-    el.textContent = message;
-    el.classList.add("show");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+    const last = stack.lastElementChild;
+    if (last && last.dataset.working === "true") last.remove();
+    const item = document.createElement("div");
+    item.className = "toast";
+    item.textContent = message;
+    if (/\u2026$/.test(message)) item.dataset.working = "true";
+    stack.appendChild(item);
+    while (stack.children.length > 4) stack.firstElementChild.remove();
+    requestAnimationFrame(() => item.classList.add("show"));
+    setTimeout(() => {
+      item.classList.remove("show");
+      setTimeout(() => item.remove(), 200);
+    }, message.length > 90 ? 7000 : 4000);
   }
 
   function makeButton(text, className, onClick) {
@@ -504,7 +521,7 @@
 
   // ---------- Editor: compression controls ----------
 
-  function buildCompressRow(record, onToggle) {
+  function buildCompressRow(record, onChange) {
     const row = document.createElement("div");
     row.className = "compress-row";
 
@@ -564,6 +581,16 @@
     hint.setAttribute("role", "status");
     row.appendChild(hint);
 
+    // What the compressed copy will lose, or that nothing gets compressed.
+    const notes = document.createElement("div");
+    notes.className = "compress-notes";
+    row.appendChild(notes);
+    function changed() {
+      notes.textContent = Datum.model.compressionNotes(record).join(" ");
+      if (onChange) onChange();
+    }
+    changed();
+
     // An invalid entry is marked and explained, and the setting in use
     // stays the last valid one; leaving the field puts that value back.
     function markInvalid(input, message) {
@@ -575,13 +602,14 @@
 
     toggle.addEventListener("change", () => {
       record.compressEnabled = toggle.checked;
-      if (onToggle) onToggle();
+      changed();
     });
     targetInput.addEventListener("input", () => {
       const v = parseFloat(targetInput.value);
       if (isFinite(v) && v > 0) {
         record.compressTarget = v;
         markInvalid(targetInput, null);
+        changed();
       } else {
         markInvalid(targetInput, "Enter a target size above 0. Still using " + record.compressTarget + " " + record.compressTargetUnit + ".");
       }
@@ -598,6 +626,7 @@
       record.compressTargetUnit = unitSelect.value;
       record.compressTarget = Math.round((bytes / next.bytes) * factor) / factor;
       syncTargetInput();
+      changed();
     });
     dimInput.addEventListener("input", () => {
       if (dimInput.value.trim() === "") {
@@ -723,7 +752,7 @@
     for (const [key, label] of tabDefs) {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "tab-btn" + (key === "common" ? " active" : "");
+      btn.className = "tab-btn" + (key === activeTab ? " active" : "");
       btn.textContent = label;
       btn.setAttribute("data-tab", key);
       tabButtons[key] = btn;
@@ -749,11 +778,14 @@
 
     const panels = { common: commonPanel, gps: gpsPanel, raw: rawPanel };
     function switchTab(key) {
+      activeTab = key;
       Object.keys(tabButtons).forEach((k) => tabButtons[k].classList.toggle("active", k === key));
       Object.keys(panels).forEach((k) => panels[k].classList.toggle("active", k === key));
       if (key === "gps") Datum.mapWidget.invalidateSize();
     }
     for (const [key] of tabDefs) tabButtons[key].addEventListener("click", () => switchTab(key));
+    if (!panels[activeTab]) activeTab = "common";
+    Object.keys(panels).forEach((k) => panels[k].classList.toggle("active", k === activeTab));
 
     const footer = document.createElement("div");
     footer.className = "editor-footer";
@@ -776,16 +808,17 @@
     btnRow.style.flexWrap = "wrap";
     btnRow.appendChild(makeButton("Reset changes", "btn btn-ghost", () => { Datum.model.resetAll(record); Datum.ui.render(Datum.app.getState()); }));
     btnRow.appendChild(makeButton("Strip all metadata", "btn btn-danger", () => { Datum.model.stripAll(record); Datum.ui.render(Datum.app.getState()); }));
-    downloadBtn = makeButton(record.compressEnabled ? "Download compressed" : "Download", "btn btn-primary", () => Datum.batch.downloadSingle(record));
+    downloadBtn = makeButton(Datum.model.willCompress(record) ? "Download compressed" : "Download", "btn btn-primary", () => Datum.batch.downloadSingle(record));
     btnRow.appendChild(downloadBtn);
     footer.appendChild(btnRow);
     panel.appendChild(footer);
 
     function updateDownloadLabel() {
-      if (downloadBtn) downloadBtn.textContent = record.compressEnabled ? "Download compressed" : "Download";
+      if (downloadBtn) downloadBtn.textContent = Datum.model.willCompress(record) ? "Download compressed" : "Download";
     }
 
     Datum.mapWidget.init("map");
+    if (activeTab === "gps") Datum.mapWidget.invalidateSize();
     Datum.mapWidget.onClick((lat, lon) => setGpsFieldsFromMap(record, lat, lon));
     if (inRange(record.fields.latitude, record.fields.longitude)) {
       Datum.mapWidget.setPosition(record.fields.latitude, record.fields.longitude, { recenter: true, zoom: 12 });
