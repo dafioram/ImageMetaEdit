@@ -236,6 +236,10 @@
       animated: false,
       crop: null,
       cropPreviewUrl: null,
+      // HEIC/AVIF only: whether the file can be saved in its own format
+      // (see heif-writer.js), and whether the person chose that.
+      inPlace: { ok: false, reason: null },
+      keepOriginalFormat: false,
     };
     Object.assign(record, lossyTraits(kind, bytes));
 
@@ -283,7 +287,9 @@
           record.originalFields = {};
           return record;
         }
+        record.inPlace = Datum.heifWriter.canRewrite(bytes);
         record.notice = label + " files are converted to JPEG to allow editing \u2014 image quality will be slightly reduced and any depth/HDR data will be dropped. GPS and other EXIF fields carry over. The downloaded file will be a .jpg." +
+          (record.inPlace.ok ? " To keep it as " + label + " with no quality loss, choose it under \"Save as\" below." : "") +
           (record.hasAlpha ? " Transparent areas become white, since JPEG has no transparency." : "") +
           (record.animated ? " Only the first frame is kept; JPEG can't hold an animation." : "");
         record.dims.width = canvas.width;
@@ -411,8 +417,56 @@
     return changed.includes("latitude") || changed.includes("longitude") || changed.includes("altitude");
   }
 
+  // ---- Keeping HEIC/AVIF in their own format. Only metadata changes can be
+  // written into the file; anything that needs new pixels (crop,
+  // compression, a different orientation) still saves as JPEG.
+  function needsNewPixels(record) {
+    if (record.crop) return "Cropping";
+    if (record.compressEnabled) return "Reducing the file size";
+    if (changedKeys(record).includes("orientation")) return "Changing the orientation";
+    return null;
+  }
+
+  function writesInPlace(record) {
+    return isConverted(record.kind) && record.keepOriginalFormat && record.inPlace.ok && !needsNewPixels(record);
+  }
+
+  function originalExtension(record) {
+    const m = /\.(heic|heif|avif)$/i.exec(record.file.name || "");
+    return m ? m[0] : record.kind === "avif" ? ".avif" : ".heic";
+  }
+
+  function setKeepOriginalFormat(record, keep) {
+    record.keepOriginalFormat = !!keep && record.inPlace.ok;
+    const base = (record.outputName || "photo").replace(/\.(jpe?g|heic|heif|avif)$/i, "");
+    record.outputName = base + (record.keepOriginalFormat ? originalExtension(record) : ".jpg");
+  }
+
+  // Writes the edited EXIF (and, when the location changed or everything
+  // is stripped, the XMP) into the original HEIC/AVIF bytes.
+  function inPlaceOutput(record) {
+    const mw = Datum.metadataWriter;
+    const xmpNow = Datum.heifWriter.readXmp(record.bytes);
+    if (record.stripRequested) {
+      return Datum.heifWriter.rewrite(record.bytes, { tiff: null, xmp: xmpNow === null ? undefined : null });
+    }
+    const exifObj = mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(Datum.heicBoxReader.extractExifTiff(record.bytes)));
+    // The container's own rotation is what viewers apply; the EXIF tag is
+    // left exactly as it was.
+    const tag = exifObj["0th"][window.piexif.ImageIFD.Orientation];
+    mw.applyFieldsToExifObj(exifObj, Object.assign({}, record.fields, { orientation: tag === undefined ? "" : tag }));
+    const tiff = mw.exifObjIsEmpty(exifObj) ? null : Datum.bin.binaryStringToUint8(window.piexif.dump(exifObj).slice(6));
+    let xmp;
+    if (locationChanged(record) && xmpNow !== null && Datum.xmp.hasGps(xmpNow)) {
+      const cleaned = Datum.xmp.removeGps(xmpNow);
+      xmp = cleaned === null ? null : cleaned;
+    }
+    return Datum.heifWriter.rewrite(record.bytes, { tiff, xmp });
+  }
+
   function getOutputBytes(record) {
     if (!record.supportsEdit) return record.bytes;
+    if (writesInPlace(record)) return inPlaceOutput(record);
     const options = { locationChanged: locationChanged(record) };
     if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested, options);
     if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested, options);
@@ -421,6 +475,7 @@
   }
 
   function getOutputMime(record) {
+    if (writesInPlace(record)) return record.kind === "avif" ? "image/avif" : "image/heic";
     if (record.kind === "jpeg" || isConverted(record.kind)) return "image/jpeg";
     if (record.kind === "png") return "image/png";
     return record.file.type || "application/octet-stream";
@@ -647,6 +702,7 @@
     getOutputBytes, getOutputMime, fieldsFromParsed,
     getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas, validationError,
     willCompress, compressionNotes, setCrop, displayUrl, changeCount, cropSource,
+    writesInPlace, needsNewPixels, setKeepOriginalFormat,
     COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };

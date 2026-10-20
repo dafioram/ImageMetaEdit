@@ -207,6 +207,7 @@
     if (diffCountEl) updateDiffCountEl(diffCountEl, record);
     updateQueueItemStatus(record);
     refreshValidity(record);
+    updateFormatNote(record);
   }
 
   // Marks every field that can't be written, with the reason underneath.
@@ -526,6 +527,61 @@
     container.appendChild(wrap);
   }
 
+  // ---------- Editor: output format (HEIC/AVIF) ----------
+
+  // HEIC and AVIF are saved as JPEG unless the person picks the original
+  // format, which keeps the image data untouched (see heif-writer.js).
+  function buildFormatRow(record) {
+    const row = document.createElement("div");
+    row.className = "format-row";
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", "Save as");
+    row.appendChild(document.createTextNode("Save as"));
+    const label = record.kind === "avif" ? "AVIF" : "HEIC";
+    const choices = [
+      ["jpeg", "JPEG (opens everywhere)"],
+      ["original", label + " (original format, no quality loss)"],
+    ];
+    for (const [value, text] of choices) {
+      const l = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "save-format-" + record.id;
+      radio.value = value;
+      radio.checked = (value === "original") === !!record.keepOriginalFormat;
+      if (value === "original" && !record.inPlace.ok) radio.disabled = true;
+      radio.addEventListener("change", () => {
+        if (!radio.checked) return;
+        Datum.model.setKeepOriginalFormat(record, value === "original");
+        Datum.ui.render(Datum.app.getState());
+      });
+      l.appendChild(radio);
+      l.appendChild(document.createTextNode(" " + text));
+      row.appendChild(l);
+    }
+    const note = document.createElement("div");
+    note.className = "format-note";
+    note.setAttribute("role", "status");
+    row.appendChild(note);
+    return row;
+  }
+
+  // Why the original format isn't available, or why this export will be a
+  // JPEG anyway.
+  function updateFormatNote(record) {
+    const note = document.querySelector(".format-note");
+    if (!note) return;
+    const label = record.kind === "avif" ? "AVIF" : "HEIC";
+    let text = "";
+    if (!record.inPlace.ok) {
+      text = "Can't keep this file as " + label + ": " + (record.inPlace.reason || "its structure couldn't be read") + ".";
+    } else if (record.keepOriginalFormat) {
+      const reason = Datum.model.needsNewPixels(record);
+      if (reason) text = reason + " needs new pixels, so this file will be saved as JPEG.";
+    }
+    note.textContent = text;
+  }
+
   // ---------- Editor: compression controls ----------
 
   function buildCompressRow(record, onChange) {
@@ -832,8 +888,11 @@
 
     const hasPixelSource = Datum.model.getPixelSourceBytes(record) !== null;
     let downloadBtn = null;
+    if (Datum.model.isConverted(record.kind) && record.supportsEdit) {
+      footer.appendChild(buildFormatRow(record));
+    }
     if (hasPixelSource) {
-      footer.appendChild(buildCompressRow(record, () => updateDownloadLabel()));
+      footer.appendChild(buildCompressRow(record, () => { updateDownloadLabel(); updateFormatNote(record); }));
     }
 
     const diffCount = document.createElement("div");
@@ -867,6 +926,7 @@
     }
     updateGpsReadout(record);
     refreshValidity(record);
+    updateFormatNote(record);
   }
 
   // ---------- Top-level render ----------
