@@ -62,8 +62,10 @@ appTest("a rotated AVIF converts to an upright JPEG", async (s, t) => {
 appTest("a browser whose decoder ignores AVIF rotation still gets an upright JPEG", async (s, t) => {
   if (!(await needsAvif(s, t))) return;
   // Imitate WebKit on Linux: AVIF decodes come back as stored, without the
-  // container's rotation, and the app's probe sees that.
-  await s.page.evaluate(() => {
+  // container's rotation, and the app's probe sees that. On a browser that
+  // really does this (WebKit itself), the real decoder is tested as it is.
+  await s.page.evaluate(async () => {
+    if (!(await Datum.avif.browserAppliesContainerTransforms())) return;
     const decode = window.createImageBitmap.bind(window);
     window.createImageBitmap = async (source, ...rest) => {
       const bitmap = await decode(source, ...rest);
