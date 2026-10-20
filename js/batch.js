@@ -113,5 +113,5 @@
     if (parts.length > 0) Datum.ui.showToast(parts.join(" "));
   }
 
-  Datum.batch = { downloadSingle, downloadAllAsZip, triggerDownload };
+  Datum.batch = { downloadSingle, downloadAllAsZip, triggerDownload, resolveNameAndMime };
 })(window.Datum = window.Datum || {});

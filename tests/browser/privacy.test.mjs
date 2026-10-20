@@ -66,3 +66,20 @@ test("the whole workflow works offline once the page has loaded", async () => {
     await s.close();
   }
 });
+
+test("the workflow works when index.html is opened straight from disk", async () => {
+  // README: "Open index.html directly in a browser (double-click it)".
+  const s = await openApp({ fromDisk: true });
+  try {
+    await s.context.route("**/*", (route) => {
+      const url = route.request().url();
+      return url.startsWith("file:") ? route.continue() : route.abort("internetdisconnected");
+    });
+    await runFullSession(s);
+    const rs = await records(s.page);
+    assert.equal(rs.length, 7);
+    assert.deepEqual(s.errors, [], "no errors when run from file://");
+  } finally {
+    await s.close();
+  }
+});

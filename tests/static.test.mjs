@@ -81,6 +81,32 @@ test("shipped code only references allowed absolute URLs", () => {
   assert.deepEqual([...unexpected], [], "unexpected external URL(s) in shipped code");
 });
 
+// The browser tests only see requests made on the paths they happen to run.
+// This catches any network API in the app code, run or not. Map tiles are
+// fetched by Leaflet (vendor/) as <img> elements, not by the app's own code.
+const NETWORK_APIS = [
+  /\bfetch\s*\(/,
+  /\bXMLHttpRequest\b/,
+  /\bsendBeacon\b/,
+  /\bWebSocket\b/,
+  /\bEventSource\b/,
+  /\bimportScripts\b/,
+  /\bnew\s+(Shared)?Worker\s*\(/,
+  /\bserviceWorker\b/,
+  /createElement\(\s*["']script["']\s*\)/,
+];
+
+test("app code uses no network APIs", () => {
+  const hits = [];
+  for (const f of readdirSync(JS_DIR).filter((f) => f.endsWith(".js"))) {
+    const lines = readFileSync(path.join(JS_DIR, f), "utf8").split("\n");
+    lines.forEach((line, i) => {
+      for (const re of NETWORK_APIS) if (re.test(line)) hits.push(`js/${f}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(hits, [], "the app promises nothing is uploaded; network calls need review");
+});
+
 // Each fixture must actually be the format its extension claims, so the
 // browser tests exercise the real decoders rather than a mislabeled file.
 const SIGNATURES = {
