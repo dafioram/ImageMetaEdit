@@ -197,6 +197,7 @@ export function records(page) {
       height: r.dims.height,
       error: r.error,
       notice: r.notice,
+      warning: r.warning,
       outputName: r.outputName,
       hasPreview: !!r.previewUrl,
       fields: Object.assign({}, r.fields),
