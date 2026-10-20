@@ -5,12 +5,16 @@
 //
 // Engine selection: BROWSER=chromium|firefox|webkit (default chromium).
 // CHROMIUM_PATH optionally points at an installed Chromium binary.
+//
+// Each test file starts one server and one browser, shared by its tests.
+// Every test still gets its own browser context (fresh storage, downloads,
+// permissions), so tests stay isolated without paying for a browser launch.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { after, test } from "node:test";
 import { mkdirSync, readFileSync } from "node:fs";
 import { chromium, firefox, webkit } from "playwright";
 
@@ -83,9 +87,25 @@ export function isTileUrl(url) {
   }
 }
 
-export async function openApp({ acceptDownloads = true } = {}) {
-  const server = await startServer();
-  const browser = await launchBrowser();
+// Started on first use and shut down after the file's last test. The hook is
+// registered here, at import time, so it belongs to the file rather than to
+// whichever test happened to start the browser.
+let shared = null;
+function sharedServerAndBrowser() {
+  if (!shared) shared = Promise.all([startServer(), launchBrowser()]).then(([server, browser]) => ({ server, browser }));
+  return shared;
+}
+after(async () => {
+  if (!shared) return;
+  const { server, browser } = await shared;
+  await browser.close();
+  await server.close();
+});
+
+// Opens the app in a fresh browser context. With fromDisk, the page is loaded
+// from a file:// URL, the way someone who double-clicks index.html runs it.
+export async function openApp({ acceptDownloads = true, fromDisk = false } = {}) {
+  const { server, browser } = await sharedServerAndBrowser();
   const context = await browser.newContext({ acceptDownloads, viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   const session = {
@@ -96,8 +116,7 @@ export async function openApp({ acceptDownloads = true } = {}) {
     errors: [],
     requests: [],
     async close() {
-      await browser.close();
-      await server.close();
+      await context.close();
     },
   };
   page.on("pageerror", (e) => session.errors.push(e.message));
@@ -111,7 +130,7 @@ export async function openApp({ acceptDownloads = true } = {}) {
     // Map tiles fail when offline; that is expected. Anything else is an error.
     if (!isTileUrl(r.url()) && !r.url().startsWith("blob:")) session.errors.push("request failed: " + r.url());
   });
-  await page.goto(server.url);
+  await page.goto(fromDisk ? pathToFileURL(path.join(ROOT, "index.html")).href : server.url);
   await page.waitForFunction(() => window.Datum && Datum.app && Datum.ui);
   return session;
 }
@@ -200,14 +219,17 @@ export function outputOf(page, index) {
     };
     const r = Datum.app.getState().records[i];
     const result = await Datum.model.getOutputBytesAsync(r);
-    // Mirrors resolveNameAndMime() in batch.js: compressed output is always
-    // JPEG, whatever the source format.
+    if (result.failed) return { b64: null, failed: true, error: result.error, compressed: false };
+    // The same name and MIME type the download buttons use.
+    const { name, mime } = Datum.batch.resolveNameAndMime(r, result);
     return {
       b64: toBase64(result.bytes),
+      failed: false,
       compressed: !!result.compressed,
       reachedTarget: result.reachedTarget,
       error: result.error || null,
-      mime: result.compressed ? "image/jpeg" : Datum.model.getOutputMime(r),
+      name,
+      mime,
     };
   }, index);
 }
