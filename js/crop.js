@@ -52,10 +52,12 @@
     return { x, y, width: Math.round(r.x + r.width) - x, height: Math.round(r.y + r.height) - y };
   }
 
-  function open(record, onApply) {
+  // `source` is the picture to show, { url, width, height }, with width
+  // and height those of the full image as shown (see Datum.model.cropSource).
+  function open(record, source, onApply) {
     close();
-    const W = record.dims.width, H = record.dims.height;
-    if (!W || !H || !record.previewUrl) return;
+    const W = source.width, H = source.height;
+    if (!W || !H || !source.url) return;
     const s = {
       record, onApply, W, H, aspect: "free",
       rect: record.crop ? Object.assign({}, record.crop) : { x: 0, y: 0, width: W, height: H },
@@ -76,7 +78,7 @@
     const img = el("img", "crop-image");
     img.alt = "";
     img.draggable = false;
-    img.src = record.previewUrl;
+    img.src = source.url;
     stage.appendChild(img);
     const box = el("div", "crop-box");
     box.tabIndex = 0;
@@ -246,11 +248,13 @@
       let previewUrl = null;
       if (!full) {
         // A reduced copy of the cropped area for the editor, queue and viewer.
+        // The picture shown may itself be a reduced copy of the image.
         const k = Math.min(1, PREVIEW_MAX / Math.max(r.width, r.height));
+        const f = img.naturalWidth / W;
         const c = document.createElement("canvas");
         c.width = Math.max(1, Math.round(r.width * k));
         c.height = Math.max(1, Math.round(r.height * k));
-        c.getContext("2d").drawImage(img, r.x, r.y, r.width, r.height, 0, 0, c.width, c.height);
+        c.getContext("2d").drawImage(img, r.x * f, r.y * f, r.width * f, r.height * f, 0, 0, c.width, c.height);
         const type = record.kind === "png" ? "image/png" : "image/jpeg";
         const blob = await new Promise((res) => c.toBlob(res, type, 0.9));
         previewUrl = blob ? URL.createObjectURL(blob) : null;

@@ -706,10 +706,19 @@
     if (record.supportsEdit && record.previewUrl && record.dims.width) {
       const cropRow = document.createElement("div");
       cropRow.className = "preview-actions";
-      const openCrop = () => Datum.crop.open(record, (rect, url) => {
-        Datum.model.setCrop(record, rect, url);
-        Datum.ui.render(Datum.app.getState());
-      });
+      const openCrop = async () => {
+        let source;
+        try {
+          source = await Datum.model.cropSource(record);
+        } catch (e) {
+          showToast("Couldn't open the crop tool: " + Datum.errors.trimSentence(Datum.errors.describe(e)) + ".");
+          return;
+        }
+        Datum.crop.open(record, source, (rect, url) => {
+          Datum.model.setCrop(record, rect, url);
+          Datum.ui.render(Datum.app.getState());
+        });
+      };
       cropRow.appendChild(makeButton(record.crop ? "Edit crop" : "Crop", "btn btn-sm crop-open", openCrop));
       if (record.crop) {
         cropRow.appendChild(makeButton("Remove crop", "btn btn-sm btn-ghost crop-remove", () => {
