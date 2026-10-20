@@ -156,6 +156,8 @@ appTest("dragging on the image draws the crop", async (s) => {
   await s.page.mouse.move(b.x + b.width * 0.75, b.y + b.height * 0.75, { steps: 6 });
   await s.page.mouse.up();
   await s.page.getByRole("button", { name: "Apply crop" }).click();
+  // Applying finishes once the cropped preview is made.
+  await s.page.waitForFunction(() => !document.querySelector(".crop-overlay"));
   const { crop } = (await records(s.page))[0];
   for (const [key, expected] of [["x", 300], ["y", 225], ["width", 600], ["height", 450]]) {
     assert.ok(Math.abs(crop[key] - expected) <= 4, `${key} ${crop[key]} should be about ${expected}`);
