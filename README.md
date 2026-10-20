@@ -51,8 +51,8 @@ until they are fixed.
 |---|---|
 | JPEG | Full read/write. Only the EXIF segment is touched — pixel data is never re-encoded, so there's no quality loss. |
 | PNG | Full read/write via the `eXIf` chunk (part of the PNG spec since 2017). Same no-recompression guarantee. |
-| HEIC/HEIF | Read + preview natively. Editing requires converting to JPEG first (see below) — you'll see an explicit notice before this happens. |
-| AVIF | Read + preview through the browser's own decoder, converted to JPEG for editing like HEIC. Browsers can't write AVIF, so edited files are saved as `.jpg`; without an AVIF decoder (some older browsers) the file is kept as is. |
+| HEIC/HEIF | Read + preview natively. Saved as JPEG by default (see below) — you'll see an explicit notice before this happens. "Save as: HEIC" keeps the original file and writes only the metadata, when the file allows it. |
+| AVIF | Read + preview through the browser's own decoder. Saved as JPEG by default, like HEIC, or kept as AVIF with "Save as: AVIF". Without an AVIF decoder (some older browsers) the file is kept as is. |
 | Anything else | Basic file info only (name, size, dimensions). Passed through unchanged on download. |
 
 Editable fields: camera make/model/lens, aperture, shutter speed, ISO,
@@ -124,7 +124,7 @@ doesn't repeatedly rebuild the editor panel.
 
 ## Design notes and known limitations
 
-**Why HEIC converts to JPEG instead of editing in place.** JPEG's EXIF
+**Why HEIC converts to JPEG by default.** JPEG's EXIF
 lives in one self-contained segment — swap it out, update one length
 field, done. HEIC stores everything (image data, thumbnail, EXIF) as
 separate "items" in a box structure with explicit byte offsets; changing
@@ -134,6 +134,20 @@ surgery, HEIC files are decoded and re-encoded as JPEG for editing. This
 does mean a small quality loss (HEVC→JPEG is lossy-to-lossy) and any
 depth-map/HDR gain-map data is dropped — you're shown this before it
 happens, not after.
+
+**Keeping HEIC or AVIF in their own format.** "Save as: HEIC/AVIF"
+writes the edited EXIF into the original file without touching the image
+data. Rather than shift every offset in the file, the new EXIF (and, when
+the location changed or everything is stripped, the XMP) goes in a new
+`mdat` box at the end of the file; only that item's entry in the `iloc`
+table is repointed, and the old bytes are zeroed so an old location
+doesn't linger. This is only done when it is plainly safe: the file
+already has an EXIF item, stored as one piece of file data, that shares
+no bytes with anything else. Otherwise the option is disabled with the
+reason (a file with no EXIF block, for example, would need the image data
+moved). Anything that needs new pixels — a crop, "Reduce file size", or a
+new orientation — still saves as JPEG, and the editor says so. The
+container's own rotation is what viewers apply, so it is left alone.
 
 **Converted formats keep one generation of loss.** HEIC and AVIF are
 decoded once to show and convert them. When "Reduce file size" is on, the

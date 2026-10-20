@@ -21,7 +21,9 @@
   // name and MIME type follow the bytes actually produced. record.outputName
   // itself is never changed, so turning compression back off gives the
   // original name back.
-  const EXTENSIONS_FOR_MIME = { "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] };
+  const EXTENSIONS_FOR_MIME = {
+    "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"], "image/heic": [".heic", ".heif"], "image/avif": [".avif"],
+  };
   const IMAGE_EXTENSION = /\.(jpe?g|png|heic|heif|avif|gif|webp|bmp|tiff?)$/i;
 
   // The download name always matches the data: a JPEG is never saved as
@@ -35,7 +37,10 @@
     if (!exts || exts.some((e) => typed.toLowerCase().endsWith(e))) return { name: typed, mime, corrected: null };
     const wrong = IMAGE_EXTENSION.exec(typed);
     const base = wrong ? typed.slice(0, wrong.index) : typed;
-    return { name: (base || "photo") + exts[0], mime, corrected: wrong ? wrong[0] : null };
+    // "Save as HEIC/AVIF" set that ending; when this export needs new pixels
+    // it is a JPEG, which the editor already says, so no toast for it.
+    const expected = record.keepOriginalFormat && /^\.(heic|heif|avif)$/i.test(wrong ? wrong[0] : "");
+    return { name: (base || "photo") + exts[0], mime, corrected: wrong && !expected ? wrong[0] : null };
   }
 
   async function downloadSingle(record) {
@@ -54,7 +59,7 @@
     const blob = new Blob([result.bytes], { type: mime });
     triggerDownload(blob, name);
     if (corrected) {
-      Datum.ui.showToast("Saved as " + name + ": the file is a " + (mime === "image/png" ? "PNG" : "JPEG") + ", so the " + corrected + " ending was corrected.");
+      Datum.ui.showToast("Saved as " + name + ": the file is a " + mime.replace("image/", "").toUpperCase() + ", so the " + corrected + " ending was corrected.");
     }
 
     if (result.error) {
