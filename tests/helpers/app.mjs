@@ -137,10 +137,10 @@ export async function openApp({ acceptDownloads = true, fromDisk = false } = {})
 
 // Runs fn with a fresh app session, saving a screenshot if the test fails.
 export function appTest(name, fn, options) {
-  test(name, options || {}, async () => {
+  test(name, options || {}, async (t) => {
     const session = await openApp();
     try {
-      await fn(session);
+      await fn(session, t);
     } catch (e) {
       const dir = path.join(ROOT, "test-results");
       mkdirSync(dir, { recursive: true });
@@ -405,4 +405,22 @@ export function thumbnailSize(page, base64) {
 // encoding shifts colours slightly).
 export function closeColor(rgba, rgb, tolerance = 40) {
   return rgb.every((v, i) => Math.abs(rgba[i] - v) <= tolerance);
+}
+
+// Whether this browser has an AVIF decoder (all current desktop browsers
+// do; some Linux WebKit builds don't). Tests that need one skip otherwise.
+export function canDecodeAvif(page) {
+  const b64 = readFileSync(fixture("sample.avif")).toString("base64");
+  return page.evaluate(async (b64) => {
+    try {
+      const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k);
+      const bmp = await createImageBitmap(new Blob([u8], { type: "image/avif" }));
+      bmp.close();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }, b64);
 }

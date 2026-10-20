@@ -78,8 +78,8 @@
       "<h2>Drop a photo here</h2>" +
       "<p>See its metadata, edit GPS and camera details, then download \u2014 nothing leaves your browser.</p>" +
       '<label class="btn btn-primary" for="file-input">Choose files</label>' +
-      '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif,.zip,application/zip" multiple />' +
-      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC: preview + convert to edit &middot; other formats: view only &middot; .zip: unpacked automatically</div>' +
+      '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif,image/avif,.avif,image/gif,image/webp,image/bmp,image/tiff,.tif,.tiff,.zip,application/zip" multiple />' +
+      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC &amp; AVIF: preview + convert to edit &middot; GIF, WebP, BMP, TIFF: view only &middot; .zip: unpacked automatically</div>' +
       "</div>"
     );
   }
@@ -164,7 +164,7 @@
     addInput.type = "file";
     addInput.id = "file-input-more";
     addInput.multiple = true;
-    addInput.accept = "image/jpeg,image/png,image/heic,image/heif,.heic,.heif,.zip,application/zip";
+    addInput.accept = "image/jpeg,image/png,image/heic,image/heif,.heic,.heif,image/avif,.avif,image/gif,image/webp,image/bmp,image/tiff,.tif,.tiff,.zip,application/zip";
     addInput.addEventListener("change", () => { if (addInput.files.length) Datum.app.addFiles(addInput.files); });
     addLabel.appendChild(addInput);
     actions.appendChild(addLabel);

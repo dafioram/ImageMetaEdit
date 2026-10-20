@@ -173,6 +173,12 @@ def main():
     # decoders apply; its EXIF tag says 6 as well, like phone photos.
     save(stored, "photo-rotated.heic", format="HEIF", quality=90, exif=e6.tobytes())
 
+    # AVIF, converted to JPEG for editing like HEIC: one with camera and GPS
+    # EXIF, and the sideways quadrant image whose rotation is stored as the
+    # container transform (irot), as AVIF encoders do.
+    save(scene(640, 480, seed=13), "photo-exif.avif", format="AVIF", quality=70, exif=camera_exif().tobytes())
+    save(stored, "photo-rotated.avif", format="AVIF", quality=80, exif=e6.tobytes())
+
     # Non-ASCII EXIF text written as UTF-8, for the HEIC read path.
     utf8 = piexif.dump({"0th": {piexif.ImageIFD.ImageDescription: "Zoë Ω 日本 📷".encode("utf-8"),
                                 piexif.ImageIFD.Make: b"Datum Test Cam"}})

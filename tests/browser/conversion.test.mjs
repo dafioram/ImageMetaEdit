@@ -45,7 +45,7 @@ appTest("an unedited PNG export stays a PNG", async (s) => {
   assert.ok(isPng(bytesOf(out.b64)));
 });
 
-for (const file of ["sample.gif", "sample.bmp", "sample.webp", "sample.tiff", "sample.avif"]) {
+for (const file of ["sample.gif", "sample.bmp", "sample.webp", "sample.tiff"]) {
   appTest(`${file} passes through byte-for-byte`, async (s) => {
     await addFixtures(s, [file]);
     const out = await outputOf(s.page, 0);
