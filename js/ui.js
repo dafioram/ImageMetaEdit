@@ -70,7 +70,7 @@
   function statusTextFor(record) {
     if (record.error) return "Couldn't read file";
     if (!record.supportsEdit) return "View only";
-    const n = Datum.model.changedKeys(record).length;
+    const n = Datum.model.changeCount(record);
     const changes = n > 0 ? (n + (n === 1 ? " change" : " changes")) : "No changes";
     return record.warning ? "Damaged \u00B7 " + changes : changes;
   }
@@ -125,7 +125,7 @@
     const thumb = document.createElement("img");
     thumb.className = "thumb";
     thumb.alt = "";
-    if (record.previewUrl) thumb.src = record.previewUrl;
+    if (Datum.model.displayUrl(record)) thumb.src = Datum.model.displayUrl(record);
     item.appendChild(thumb);
 
     const meta = document.createElement("div");
@@ -250,11 +250,18 @@
   function updateDiffCountEl(el, record) {
     const n = Datum.model.changedKeys(record).length;
     el.innerHTML = "";
-    if (n === 0) { el.textContent = "No changes yet"; return; }
-    const b = document.createElement("b");
-    b.textContent = String(n);
-    el.appendChild(b);
-    el.appendChild(document.createTextNode(n === 1 ? " field changed" : " fields changed"));
+    if (n === 0 && !record.crop) { el.textContent = "No changes yet"; return; }
+    if (n > 0) {
+      const b = document.createElement("b");
+      b.textContent = String(n);
+      el.appendChild(b);
+      el.appendChild(document.createTextNode(n === 1 ? " field changed" : " fields changed"));
+    }
+    if (record.crop) {
+      const b = document.createElement("b");
+      b.textContent = n > 0 ? " \u00B7 cropped" : "Cropped";
+      el.appendChild(b);
+    }
   }
 
   function updateQueueItemName(record) {
@@ -664,7 +671,7 @@
     previewFrame.className = "preview-frame";
     if (record.previewUrl) {
       const img = document.createElement("img");
-      img.src = record.previewUrl;
+      img.src = Datum.model.displayUrl(record);
       img.alt = "";
       previewFrame.appendChild(img);
 
@@ -693,7 +700,26 @@
       span.textContent = "No preview available";
       previewFrame.appendChild(span);
     }
-    top.appendChild(previewFrame);
+    const previewColumn = document.createElement("div");
+    previewColumn.className = "preview-column";
+    previewColumn.appendChild(previewFrame);
+    if (record.supportsEdit && record.previewUrl && record.dims.width) {
+      const cropRow = document.createElement("div");
+      cropRow.className = "preview-actions";
+      const openCrop = () => Datum.crop.open(record, (rect, url) => {
+        Datum.model.setCrop(record, rect, url);
+        Datum.ui.render(Datum.app.getState());
+      });
+      cropRow.appendChild(makeButton(record.crop ? "Edit crop" : "Crop", "btn btn-sm crop-open", openCrop));
+      if (record.crop) {
+        cropRow.appendChild(makeButton("Remove crop", "btn btn-sm btn-ghost crop-remove", () => {
+          Datum.model.setCrop(record, null, null);
+          Datum.ui.render(Datum.app.getState());
+        }));
+      }
+      previewColumn.appendChild(cropRow);
+    }
+    top.appendChild(previewColumn);
 
     const summary = document.createElement("div");
     summary.className = "file-summary";
@@ -712,7 +738,12 @@
     facts.className = "facts";
     facts.appendChild(factSpan("Type", record.kind.toUpperCase()));
     facts.appendChild(factSpan("Size", formatBytes(record.file.size)));
-    if (record.dims.width) facts.appendChild(factSpan("Dimensions", record.dims.width + "\u00D7" + record.dims.height));
+    if (record.crop) {
+      facts.appendChild(factSpan("Dimensions", record.crop.width + "\u00D7" + record.crop.height +
+        " (cropped from " + record.dims.width + "\u00D7" + record.dims.height + ")"));
+    } else if (record.dims.width) {
+      facts.appendChild(factSpan("Dimensions", record.dims.width + "\u00D7" + record.dims.height));
+    }
     summary.appendChild(facts);
 
     if (record.notice) {

@@ -102,6 +102,18 @@ carries your metadata: it loads the original file's full EXIF, merges
 your edits on top exactly like a normal export, and inserts that into the
 newly-compressed pixel data.
 
+**Crop.** "Crop" under the preview opens a crop dialog: drag on the
+image to draw the area, drag it or its handles to adjust, pick an aspect
+ratio, or type exact X / Y / width / height values (arrow keys nudge the
+box; Escape cancels). The editor, queue and viewer show the cropped
+picture, and Reset changes or Remove crop bring the full image back.
+Cropping re-encodes the image when it's downloaded: JPEG at high quality
+(HEIC and AVIF too, which are saved as JPEG), PNG without loss and with its
+transparency. EXIF metadata is kept, the pixels are stored upright, and the
+embedded EXIF thumbnail is removed, since it would still show the uncropped
+picture. With "Reduce file size" on, the crop is compressed to the target
+in the same pass.
+
 **Fullscreen viewer.** Click the main preview image to open a gallery
 view — left/right arrows or arrow keys move between every file in the
 queue, wrapping at the ends. It's a plain overlay outside the normal

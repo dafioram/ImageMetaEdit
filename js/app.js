@@ -66,6 +66,7 @@
     if (removed.previewUrl && removed.previewUrl.indexOf("blob:") === 0) {
       URL.revokeObjectURL(removed.previewUrl);
     }
+    Datum.model.setCrop(removed, null, null);
     if (state.activeId === id) {
       state.activeId = state.records.length ? state.records[0].id : null;
     }

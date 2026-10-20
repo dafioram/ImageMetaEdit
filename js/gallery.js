@@ -74,8 +74,8 @@
   function render() {
     const record = records[index];
     if (!record) return;
-    if (record.previewUrl) {
-      imgEl.src = record.previewUrl;
+    if (Datum.model.displayUrl(record)) {
+      imgEl.src = Datum.model.displayUrl(record);
       imgEl.style.display = "";
       noPreviewEl.style.display = "none";
     } else {

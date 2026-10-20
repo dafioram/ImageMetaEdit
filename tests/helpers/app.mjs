@@ -198,6 +198,7 @@ export function records(page) {
       error: r.error,
       notice: r.notice,
       warning: r.warning,
+      crop: r.crop ? Object.assign({}, r.crop) : null,
       outputName: r.outputName,
       hasPreview: !!r.previewUrl,
       fields: Object.assign({}, r.fields),
