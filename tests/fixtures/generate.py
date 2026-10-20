@@ -189,6 +189,9 @@ def main():
     ImageDraw.Draw(see_through).rectangle([0, 0, 79, 119], fill=(220, 30, 30, 255))
     save(see_through, "transparent.avif", format="AVIF", quality=90)
 
+    # Crop: a PNG of the quadrants with EXIF, which stays a lossless PNG.
+    save(quadrants(), "quadrants.png", format="PNG", exif=camera_exif().tobytes())
+
     # Non-ASCII EXIF text written as UTF-8, for the HEIC read path.
     utf8 = piexif.dump({"0th": {piexif.ImageIFD.ImageDescription: "Zoë Ω 日本 📷".encode("utf-8"),
                                 piexif.ImageIFD.Make: b"Datum Test Cam"}})

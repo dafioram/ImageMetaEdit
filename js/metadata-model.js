@@ -234,6 +234,8 @@
       dims: { width: null, height: null },
       hasAlpha: false,
       animated: false,
+      crop: null,
+      cropPreviewUrl: null,
     };
     Object.assign(record, lossyTraits(kind, bytes));
 
@@ -362,6 +364,26 @@
   function resetAll(record) {
     record.fields = Object.assign({}, record.originalFields);
     record.stripRequested = false;
+    setCrop(record, null, null);
+  }
+
+  // ---- Crop. `rect` is in pixels of the image as displayed (the source's
+  // own orientation applied), which is what the preview and the crop dialog
+  // show. A crop is a change like an edited field, and Reset clears it.
+  function setCrop(record, rect, previewUrl) {
+    if (record.cropPreviewUrl) URL.revokeObjectURL(record.cropPreviewUrl);
+    record.crop = rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+    record.cropPreviewUrl = rect ? previewUrl || null : null;
+  }
+
+  // The image to show for a record: the cropped preview when there is one.
+  function displayUrl(record) {
+    return record.cropPreviewUrl || record.previewUrl;
+  }
+
+  // Edited fields plus the crop, for the change counters.
+  function changeCount(record) {
+    return changedKeys(record).length + (record.crop ? 1 : 0);
   }
 
   // Clears every field except orientation: that tag only says which way up
@@ -448,21 +470,75 @@
   // user wants displayed (their orientation field applied), optionally
   // capped to maxDimension on the longest side. Used by every path that
   // re-encodes pixels; the output is then written with orientation 1.
-  async function uprightCanvas(record, pixelSource, exifObj, maxDimension) {
+  async function uprightCanvas(record, pixelSource, exifObj, maxDimension, crop, keepAlpha) {
+    if (crop) {
+      // The crop is in pixels of the image as shown, so it is cut from a
+      // canvas this app turned that way itself, then the user's orientation
+      // is applied relative to it.
+      const shown = await shownCanvas(record, pixelSource, exifObj, keepAlpha);
+      const cut = Datum.compress.drawToCanvas(shown.canvas, maxDimension, crop, keepAlpha);
+      const o = Datum.orientation;
+      return o.applyToCanvas(cut, o.compose(o.inverse(shown.tag), o.normalize(record.fields.orientation || 1)));
+    }
     if (isConverted(record.kind)) {
       // Decode the original again rather than the converted JPEG, so the
       // pixels are lossy-encoded once, not twice. The decoded image is
       // already the displayed one; only the user's orientation is applied.
       const decoded = await CONVERTED[record.kind].decode(record.bytes);
-      const canvas = Datum.compress.drawToCanvas(decoded, maxDimension);
+      const canvas = Datum.compress.drawToCanvas(decoded, maxDimension, crop, keepAlpha);
       return Datum.orientation.applyToCanvas(canvas, Datum.orientation.normalize(record.fields.orientation || 1));
     }
     const img = await Datum.compress.loadImageFromBytes(pixelSource);
-    const canvas = Datum.compress.drawToCanvas(img, maxDimension);
+    const canvas = Datum.compress.drawToCanvas(img, maxDimension, crop, keepAlpha);
     const sourceKind = record.kind === "png" ? "png" : "jpeg";
     const sourceTag = exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1;
     const remaining = await Datum.orientation.remainingTransform(sourceKind, sourceTag, record.fields.orientation || 1);
     return Datum.orientation.applyToCanvas(canvas, remaining);
+  }
+
+  // The full image as it is shown (the file's own orientation applied), and
+  // that orientation. Drawn by this app rather than by asking the browser
+  // for a region of the rotated <img>: browsers disagree on whether such a
+  // region is in shown or stored pixels (WebKit uses stored ones).
+  async function shownCanvas(record, pixelSource, exifObj, keepAlpha) {
+    if (isConverted(record.kind)) {
+      // Decoded the way it is displayed, container rotation included.
+      return { canvas: await CONVERTED[record.kind].decode(record.bytes), tag: 1 };
+    }
+    const o = Datum.orientation;
+    const img = await Datum.compress.loadImageFromBytes(pixelSource);
+    const decoded = Datum.compress.drawToCanvas(img, null, null, keepAlpha);
+    const tag = o.normalize(exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1);
+    const applied = (await o.browserAppliesOrientation(record.kind === "png" ? "png" : "jpeg")) ? tag : 1;
+    return { canvas: o.applyToCanvas(decoded, o.compose(o.inverse(applied), tag)), tag };
+  }
+
+  // The picture the crop dialog shows: { url, width, height }, with width
+  // and height those of the full image as shown. A file with no rotation
+  // tag uses its preview; a rotated one gets an upright copy with no tag,
+  // so the dialog and the export agree on every browser.
+  const CROP_SOURCE_MAX = 2000;
+  function cropSource(record) {
+    const preview = { url: record.previewUrl, width: record.dims.width, height: record.dims.height };
+    if (isConverted(record.kind)) return Promise.resolve(preview);
+    let exifObj;
+    try {
+      exifObj = loadExifObjForRecord(record);
+    } catch (e) {
+      return Promise.resolve(preview); // unreadable EXIF: no rotation applies
+    }
+    if (Datum.orientation.normalize(exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1) === 1) return Promise.resolve(preview);
+    if (!record.cropSource) {
+      record.cropSource = (async () => {
+        const keepAlpha = record.kind === "png";
+        const { canvas } = await shownCanvas(record, getPixelSourceBytes(record), exifObj, keepAlpha);
+        const small = Datum.compress.drawToCanvas(canvas, CROP_SOURCE_MAX, null, keepAlpha);
+        const blob = await Datum.compress.canvasToBlob(small, keepAlpha ? "image/png" : "image/jpeg", 0.92);
+        return { url: URL.createObjectURL(blob), width: canvas.width, height: canvas.height };
+      })();
+      record.cropSource.catch(() => { record.cropSource = null; });
+    }
+    return record.cropSource;
   }
 
   // Compression-aware output. Only actually recompresses when enabled AND
@@ -473,6 +549,7 @@
   // as they are.
   function willCompress(record) {
     if (!record.supportsEdit || !record.compressEnabled) return false;
+    if (record.crop) return true;
     const source = getPixelSourceBytes(record);
     return !!source && source.length > targetBytesFor(record);
   }
@@ -497,9 +574,45 @@
     return problems.map((p) => Datum.errors.trimSentence(p.message)).join("; ");
   }
 
+  // Cropping re-encodes the pixels: JPEG (and converted HEIC/AVIF) at high
+  // quality, PNG losslessly. With compression on, the crop is compressed
+  // to the target in the same pass. EXIF is carried over as for any
+  // re-encode: upright pixels, orientation 1, no stale thumbnail.
+  const CROP_JPEG_QUALITY = 0.95;
+
+  async function croppedOutput(record) {
+    try {
+      const exifObj = loadExifObjForRecord(record);
+      const fields = Datum.orientation.fieldsForUprightPixels(record.fields);
+      const maxDimension = record.compressEnabled ? record.compressMaxDimension || null : null;
+      const pngOut = record.kind === "png" && !record.compressEnabled;
+      const canvas = await uprightCanvas(record, getPixelSourceBytes(record), exifObj, maxDimension, record.crop, pngOut);
+      const size = { width: canvas.width, height: canvas.height };
+      const strip = record.stripRequested;
+      if (record.compressEnabled) {
+        const target = targetBytesFor(record);
+        const exifSize = strip ? 0 : Datum.metadataWriter.mergedExifSize(exifObj, fields, size);
+        const { blob, reachedTarget } = await Datum.compress.compressToTargetSize(canvas, Math.max(1, target - exifSize));
+        const bytes = Datum.metadataWriter.insertMergedExif(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
+        return { bytes, compressed: true, cropped: true, reachedTarget: reachedTarget && bytes.length <= target };
+      }
+      if (pngOut) {
+        const blob = await Datum.compress.canvasToBlob(canvas, "image/png");
+        const bytes = Datum.metadataWriter.insertMergedExifPng(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
+        return { bytes, compressed: false, cropped: true };
+      }
+      const blob = await Datum.compress.canvasToJpegBlob(canvas, CROP_JPEG_QUALITY);
+      const bytes = Datum.metadataWriter.insertMergedExif(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
+      return { bytes, compressed: false, cropped: true };
+    } catch (e) {
+      return { bytes: null, compressed: false, failed: true, error: errorMessage(e) };
+    }
+  }
+
   async function getOutputBytesAsync(record) {
     const invalid = validationError(record);
     if (invalid) return { bytes: null, compressed: false, failed: true, invalid: true, error: invalid };
+    if (record.supportsEdit && record.crop) return croppedOutput(record);
     if (!record.supportsEdit || !record.compressEnabled) {
       return plainOutput(record);
     }
@@ -533,7 +646,7 @@
     detectKind, isConverted, createFileRecord, changedKeys, resetAll, stripAll,
     getOutputBytes, getOutputMime, fieldsFromParsed,
     getPixelSourceBytes, loadExifObjForRecord, getOutputBytesAsync, uprightCanvas, validationError,
-    willCompress, compressionNotes,
+    willCompress, compressionNotes, setCrop, displayUrl, changeCount, cropSource,
     COMPRESS_UNITS, compressUnit, targetBytesFor,
     EXIFR_OPTS_STRICT, EXIFR_OPTS_PRETTY,
   };

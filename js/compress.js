@@ -20,9 +20,13 @@
   }
 
   // maxDimension: longest side, in pixels; null/0/NaN means no resize.
-  function drawToCanvas(img, maxDimension) {
+  // crop: optional { x, y, width, height } region of the source to keep.
+  // keepAlpha: leave transparency alone (for PNG output).
+  function drawToCanvas(img, maxDimension, crop, keepAlpha) {
     // An <img> reports naturalWidth; a canvas or ImageBitmap reports width.
-    let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const fullW = img.naturalWidth || img.width, fullH = img.naturalHeight || img.height;
+    const src = crop || { x: 0, y: 0, width: fullW, height: fullH };
+    let w = src.width, h = src.height;
     if (maxDimension && isFinite(maxDimension) && maxDimension >= 50 && Math.max(w, h) > maxDimension) {
       const scale = maxDimension / Math.max(w, h);
       w = Math.max(1, Math.round(w * scale));
@@ -34,11 +38,22 @@
     const ctx = canvas.getContext("2d");
     // JPEG has no transparency: paint white first, or transparent areas
     // would encode as black.
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(img, 0, 0, w, h);
+    if (!keepAlpha) {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.drawImage(img, src.x, src.y, src.width, src.height, 0, 0, w, h);
     if (typeof img.src === "string" && img.src.indexOf("blob:") === 0) URL.revokeObjectURL(img.src);
     return canvas;
+  }
+
+  function canvasToBlob(canvas, mime, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error("Could not encode the image.")); return; }
+        resolve(blob);
+      }, mime, quality);
+    });
   }
 
   function canvasToJpegBlob(canvas, quality) {
@@ -80,5 +95,5 @@
     return { blob: smallest.blob, quality: smallest.quality, reachedTarget: false };
   }
 
-  Datum.compress = { loadImageFromBytes, drawToCanvas, canvasToJpegBlob, compressToTargetSize };
+  Datum.compress = { loadImageFromBytes, drawToCanvas, canvasToBlob, canvasToJpegBlob, compressToTargetSize };
 })(window.Datum = window.Datum || {});

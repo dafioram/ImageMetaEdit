@@ -322,6 +322,17 @@
     return bin.binaryStringToUint8(newBinary);
   }
 
+  // PNG counterpart of insertMergedExif, for a cropped PNG re-encoded
+  // losslessly by the browser: the merged EXIF goes into an eXIf chunk.
+  function insertMergedExifPng(exifObj, fields, pngBytes, strip, size) {
+    if (strip) return pngBytes;
+    prepareExifForNewPixels(exifObj, size && size.width, size && size.height);
+    applyFieldsToExifObj(exifObj, fields);
+    if (exifObjIsEmpty(exifObj)) return pngBytes;
+    const dumped = window.piexif.dump(exifObj);
+    return Datum.pngCodec.writeExifChunk(pngBytes, bin.binaryStringToUint8(dumped.slice(6)), false);
+  }
+
   // Size in bytes of the EXIF segment insertMergedExif would add, so the
   // compression target can leave room for it.
   function mergedExifSize(exifObj, fields, size) {
@@ -333,6 +344,6 @@
 
   Datum.metadataWriter = {
     loadExifObj, applyFieldsToExifObj, exifObjIsEmpty, writeJpeg, writePng, emptyExifObj,
-    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif, mergedExifSize, textToExif, exifToText,
+    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif, insertMergedExifPng, mergedExifSize, textToExif, exifToText,
   };
 })(window.Datum = window.Datum || {});
