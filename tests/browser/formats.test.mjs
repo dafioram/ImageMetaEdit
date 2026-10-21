@@ -1,5 +1,5 @@
 // Every input format the app accepts loads through the real file input and
-// lands in the right category: editable (JPEG, PNG, HEIC/HEIF) or view-only
+// lands in the right category: editable (JPEG, PNG, WebP, HEIC/HEIF, AVIF) or view-only
 // (everything else, passed through unchanged).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -14,12 +14,15 @@ const EDITABLE = [
   { file: "photo-noexif.heif", kind: "heic", note: "HEIF with the .heif extension and no EXIF" },
   { file: "photo-exif.avif", kind: "avif", note: "AVIF with camera and GPS EXIF", needsAvif: true },
   { file: "sample.avif", kind: "avif", note: "AVIF with no EXIF", needsAvif: true },
+  { file: "sample.webp", kind: "webp", note: "plain lossy WebP with no metadata" },
+  { file: "photo-exif.webp", kind: "webp", note: "lossy WebP with EXIF and XMP" },
+  { file: "transparent.webp", kind: "webp", note: "plain lossless WebP with transparency" },
+  { file: "animated.webp", kind: "webp", note: "animated WebP with EXIF" },
 ];
 
 const VIEW_ONLY = [
   { file: "sample.gif", note: "GIF" },
   { file: "sample.bmp", note: "BMP" },
-  { file: "sample.webp", note: "WebP" },
   { file: "sample.tiff", note: "TIFF (Chromium cannot decode it, so no dimensions)" },
 ];
 

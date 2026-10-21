@@ -205,6 +205,33 @@
     return out;
   }
 
+  // WebP: the EXIF and XMP chunks are replaced; the image data is not
+  // touched (see webp-codec.js). Same rules as writePng.
+  function writeWebp(originalBytes, fields, strip, options) {
+    const codec = Datum.webpCodec;
+    if (strip) {
+      const exif = orientationOnlyExif(fields);
+      return codec.write(originalBytes, { tiff: exif ? bin.binaryStringToUint8(exif.slice(6)) : null, xmp: null });
+    }
+    const existingTiff = codec.getExif(originalBytes);
+    const exifObj = existingTiff
+      ? loadExifObj("Exif\0\0" + bin.uint8ToBinaryString(existingTiff))
+      : emptyExifObj();
+    applyFieldsToExifObj(exifObj, fields);
+    // A file with no EXIF gets none just for the editor's default "Normal"
+    // orientation, so an unedited plain WebP downloads unchanged.
+    const onlyNormal = !existingTiff && Object.keys(exifObj["0th"]).length === 1 &&
+      exifObj["0th"][window.piexif.ImageIFD.Orientation] === 1 && exifObjIsEmpty({ "0th": {}, Exif: exifObj.Exif, GPS: exifObj.GPS });
+    const tiff = exifObjIsEmpty(exifObj) || onlyNormal ? null : bin.binaryStringToUint8(window.piexif.dump(exifObj).slice(6));
+    let xmp;
+    if (options && options.locationChanged) {
+      const text = codec.getXmp(originalBytes);
+      const kept = xmpWithoutGps(text);
+      if (kept !== text) xmp = kept;
+    }
+    return codec.write(originalBytes, { tiff, xmp });
+  }
+
   // Inverse of applyFieldsToExifObj: given a loaded exifObj (numeric-tag
   // keyed, as produced by piexif.load), populate our curated `fields`
   // model. Used for HEIC, where metadata is read via heic-box-reader.js +
@@ -333,6 +360,15 @@
     return Datum.pngCodec.writeExifChunk(pngBytes, bin.binaryStringToUint8(dumped.slice(6)), false);
   }
 
+  // WebP counterpart, for a cropped WebP re-encoded by the browser.
+  function insertMergedExifWebp(exifObj, fields, webpBytes, strip, size) {
+    if (strip) return webpBytes;
+    prepareExifForNewPixels(exifObj, size && size.width, size && size.height);
+    applyFieldsToExifObj(exifObj, fields);
+    if (exifObjIsEmpty(exifObj)) return webpBytes;
+    return Datum.webpCodec.write(webpBytes, { tiff: bin.binaryStringToUint8(window.piexif.dump(exifObj).slice(6)), xmp: null });
+  }
+
   // Size in bytes of the EXIF segment insertMergedExif would add, so the
   // compression target can leave room for it.
   function mergedExifSize(exifObj, fields, size) {
@@ -343,7 +379,8 @@
   }
 
   Datum.metadataWriter = {
-    loadExifObj, applyFieldsToExifObj, exifObjIsEmpty, writeJpeg, writePng, emptyExifObj,
-    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif, insertMergedExifPng, mergedExifSize, textToExif, exifToText,
+    loadExifObj, applyFieldsToExifObj, exifObjIsEmpty, writeJpeg, writePng, writeWebp, emptyExifObj,
+    fieldsFromExifObj, rawDumpFromExifObj, insertMergedExif, insertMergedExifPng, insertMergedExifWebp, mergedExifSize,
+    textToExif, exifToText,
   };
 })(window.Datum = window.Datum || {});

@@ -24,6 +24,7 @@
     if (type === "image/png" || /\.png$/.test(name)) return "png";
     if (type === "image/heic" || type === "image/heif" || /\.(heic|heif)$/.test(name)) return "heic";
     if (type === "image/avif" || /\.avif$/.test(name)) return "avif";
+    if (type === "image/webp" || /\.webp$/.test(name)) return "webp";
     return "other";
   }
 
@@ -39,6 +40,12 @@
     return Object.prototype.hasOwnProperty.call(CONVERTED, kind);
   }
 
+  // Formats whose metadata is written straight into the file, leaving the
+  // image data as it is.
+  function isNative(kind) {
+    return kind === "jpeg" || kind === "png" || kind === "webp";
+  }
+
   // Formats identified from the first bytes of the file. The name and MIME
   // type are only hints; these decide what the file really is. `exts` lists
   // the extensions that match this content, the first being the one to use.
@@ -52,7 +59,7 @@
     { kind: "heic", label: "HEIC", exts: [".heic", ".heif"], test: (b) => ascii(b, 4, 8) === "ftyp" && HEIF_BRANDS.includes(ascii(b, 8, 12)) },
     { kind: "other", label: "GIF", exts: [".gif"], test: (b) => ascii(b, 0, 4) === "GIF8" },
     { kind: "other", label: "BMP", exts: [".bmp"], test: (b) => ascii(b, 0, 2) === "BM" },
-    { kind: "other", label: "WebP", exts: [".webp"], test: (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP" },
+    { kind: "webp", label: "WebP", exts: [".webp"], test: (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP" },
     { kind: "other", label: "TIFF", exts: [".tif", ".tiff"], test: (b) => ascii(b, 0, 4) === "II*\0" || ascii(b, 0, 4) === "MM\0*" },
     { kind: "avif", label: "AVIF", exts: [".avif"], test: (b) => ascii(b, 4, 8) === "ftyp" && ["avif", "avis"].includes(ascii(b, 8, 12)) },
   ];
@@ -104,6 +111,10 @@
     if (kind === "png") {
       const { problem } = Datum.pngCodec.inspect(bytes);
       return problem ? { warning: "This PNG is damaged: " + problem + ". What can be decoded is shown." } : {};
+    }
+    if (kind === "webp") {
+      const { problem } = Datum.webpCodec.inspect(bytes);
+      return problem ? { warning: "This WebP is damaged: " + problem + ". What can be decoded is shown, but saving changes can fail." } : {};
     }
     return {};
   }
@@ -178,8 +189,8 @@
   }
 
   // What re-encoding to JPEG would lose, found from the file's structure:
-  // transparency (PNG alpha or tRNS, AVIF alpha item) and animation (APNG,
-  // AVIF image sequences). JPEG holds neither, so the person is told.
+  // transparency (PNG alpha or tRNS, AVIF alpha item, WebP alpha) and
+  // animation (APNG, AVIF image sequences, animated WebP). JPEG holds neither, so the person is told.
   function lossyTraits(kind, bytes) {
     const traits = { hasAlpha: false, animated: false };
     try {
@@ -188,6 +199,10 @@
         const colorType = bytes[25];
         traits.hasAlpha = colorType === 4 || colorType === 6 || types.includes("tRNS");
         traits.animated = types.includes("acTL");
+      } else if (kind === "webp") {
+        const i = Datum.webpCodec.info(bytes);
+        traits.hasAlpha = i.hasAlpha;
+        traits.animated = i.animated;
       } else if (kind === "avif") {
         const head = Datum.bin.uint8ToBinaryString(bytes.subarray(0, Math.min(bytes.length, 4096)));
         traits.hasAlpha = head.indexOf("auxiliary:alpha") !== -1;
@@ -222,7 +237,7 @@
       fields: {},
       originalFields: {},
       outputName: mismatchNotice ? withExtension(file.name, sniffed.exts[0]) : file.name,
-      supportsEdit: kind === "jpeg" || kind === "png" || isConverted(kind),
+      supportsEdit: isNative(kind) || isConverted(kind),
       stripRequested: false,
       compressEnabled: false,
       compressTarget: COMPRESS_UNITS.MB.default,
@@ -331,6 +346,29 @@
         if (record.fields.latitude === "" && Datum.xmp.hasGps(readXmpText(kind, bytes))) {
           record.notice = "This file also stores a location in its XMP metadata, which the editor can't show. \"Strip all metadata\" removes it.";
         }
+      } else if (kind === "webp") {
+        // Read with the codec and piexif, as for HEIC: exifr has no WebP
+        // reader.
+        record.previewUrl = URL.createObjectURL(file);
+        let tiff = null;
+        try { tiff = Datum.webpCodec.getExif(bytes); } catch (e) { /* damaged: reported by the warning */ }
+        if (tiff) {
+          const exifObj = Datum.metadataWriter.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff));
+          record.fields = Datum.metadataWriter.fieldsFromExifObj(exifObj);
+          record.rawMetaPretty = Datum.metadataWriter.rawDumpFromExifObj(exifObj);
+        } else {
+          record.fields = fieldsFromParsed(null);
+        }
+        const decoded = await loadDims(record, file);
+        if (!decoded && !record.warning) {
+          record.warning = "The browser couldn't display this image, so its data may be damaged. Its metadata can still be edited.";
+        }
+        if (record.fields.latitude === "" && Datum.xmp.hasGps(readXmpText(kind, bytes))) {
+          record.notice = "This file also stores a location in its XMP metadata, which the editor can't show. \"Strip all metadata\" removes it.";
+        }
+        if (record.animated) {
+          record.notice = [record.notice, "Metadata edits keep the animation; cropping or reducing the file size keeps only the first frame."].filter(Boolean).join(" ");
+        }
       } else {
         record.previewUrl = URL.createObjectURL(file);
         record.notice = "This format isn't supported for metadata editing here. Showing basic file info only \u2014 it will pass through to the download unchanged.";
@@ -408,6 +446,7 @@
         const x = Datum.pngCodec.getXmp(bytes);
         return x ? x.text : null;
       }
+      if (kind === "webp") return Datum.webpCodec.getXmp(bytes);
     } catch (e) { /* not readable: nothing to report */ }
     return null;
   }
@@ -470,6 +509,7 @@
     const options = { locationChanged: locationChanged(record) };
     if (record.kind === "jpeg") return Datum.metadataWriter.writeJpeg(record.bytes, record.fields, !!record.stripRequested, options);
     if (record.kind === "png") return Datum.metadataWriter.writePng(record.bytes, record.fields, !!record.stripRequested, options);
+    if (record.kind === "webp") return Datum.metadataWriter.writeWebp(record.bytes, record.fields, !!record.stripRequested, options);
     if (isConverted(record.kind)) return Datum.metadataWriter.writeJpeg(record.convertedJpegBytes, record.fields, !!record.stripRequested);
     return record.bytes;
   }
@@ -478,6 +518,7 @@
     if (writesInPlace(record)) return record.kind === "avif" ? "image/avif" : "image/heic";
     if (record.kind === "jpeg" || isConverted(record.kind)) return "image/jpeg";
     if (record.kind === "png") return "image/png";
+    if (record.kind === "webp") return "image/webp";
     return record.file.type || "application/octet-stream";
   }
 
@@ -486,7 +527,7 @@
   // JPEG we made at load time, not the original container.
   function getPixelSourceBytes(record) {
     if (isConverted(record.kind)) return record.convertedJpegBytes;
-    if (record.kind === "jpeg" || record.kind === "png") return record.bytes;
+    if (isNative(record.kind)) return record.bytes;
     return null;
   }
 
@@ -505,6 +546,10 @@
     }
     if (isConverted(record.kind)) {
       const tiff = Datum.heicBoxReader.extractExifTiff(record.bytes);
+      return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
+    }
+    if (record.kind === "webp") {
+      const tiff = Datum.webpCodec.getExif(record.bytes);
       return tiff ? mw.loadExifObj("Exif\0\0" + Datum.bin.uint8ToBinaryString(tiff)) : mw.emptyExifObj();
     }
     return mw.emptyExifObj();
@@ -545,7 +590,7 @@
     }
     const img = await Datum.compress.loadImageFromBytes(pixelSource);
     const canvas = Datum.compress.drawToCanvas(img, maxDimension, crop, keepAlpha);
-    const sourceKind = record.kind === "png" ? "png" : "jpeg";
+    const sourceKind = record.kind;
     const sourceTag = exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1;
     const remaining = await Datum.orientation.remainingTransform(sourceKind, sourceTag, record.fields.orientation || 1);
     return Datum.orientation.applyToCanvas(canvas, remaining);
@@ -564,7 +609,7 @@
     const img = await Datum.compress.loadImageFromBytes(pixelSource);
     const decoded = Datum.compress.drawToCanvas(img, null, null, keepAlpha);
     const tag = o.normalize(exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1);
-    const applied = (await o.browserAppliesOrientation(record.kind === "png" ? "png" : "jpeg")) ? tag : 1;
+    const applied = (await o.browserAppliesOrientation(record.kind)) ? tag : 1;
     return { canvas: o.applyToCanvas(decoded, o.compose(o.inverse(applied), tag)), tag };
   }
 
@@ -585,7 +630,7 @@
     if (Datum.orientation.normalize(exifObj["0th"][window.piexif.ImageIFD.Orientation] || 1) === 1) return Promise.resolve(preview);
     if (!record.cropSource) {
       record.cropSource = (async () => {
-        const keepAlpha = record.kind === "png";
+        const keepAlpha = record.kind === "png" || record.kind === "webp";
         const { canvas } = await shownCanvas(record, getPixelSourceBytes(record), exifObj, keepAlpha);
         const small = Datum.compress.drawToCanvas(canvas, CROP_SOURCE_MAX, null, keepAlpha);
         const blob = await Datum.compress.canvasToBlob(small, keepAlpha ? "image/png" : "image/jpeg", 0.92);
@@ -615,8 +660,9 @@
     if (!record.supportsEdit || !record.compressEnabled) return [];
     if (!willCompress(record)) return ["This file is already under the target size, so it's saved as it is."];
     const notes = [];
-    if (record.kind === "png" && record.hasAlpha) notes.push("Transparent areas become white, since JPEG has no transparency.");
-    if (record.kind === "png" && record.animated) notes.push("Only the first frame is kept; JPEG can't hold an animation.");
+    const native = record.kind === "png" || record.kind === "webp";
+    if (native && record.hasAlpha) notes.push("Transparent areas become white, since JPEG has no transparency.");
+    if (native && record.animated) notes.push("Only the first frame is kept; JPEG can't hold an animation.");
     return notes;
   }
 
@@ -641,7 +687,10 @@
       const fields = Datum.orientation.fieldsForUprightPixels(record.fields);
       const maxDimension = record.compressEnabled ? record.compressMaxDimension || null : null;
       const pngOut = record.kind === "png" && !record.compressEnabled;
-      const canvas = await uprightCanvas(record, getPixelSourceBytes(record), exifObj, maxDimension, record.crop, pngOut);
+      // A WebP stays a WebP where the browser can encode one; elsewhere it
+      // is saved as JPEG, like compressed files.
+      const webpOut = record.kind === "webp" && !record.compressEnabled && await Datum.compress.canEncode("image/webp");
+      const canvas = await uprightCanvas(record, getPixelSourceBytes(record), exifObj, maxDimension, record.crop, pngOut || webpOut);
       const size = { width: canvas.width, height: canvas.height };
       const strip = record.stripRequested;
       if (record.compressEnabled) {
@@ -656,9 +705,17 @@
         const bytes = Datum.metadataWriter.insertMergedExifPng(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
         return { bytes, compressed: false, cropped: true };
       }
+      if (webpOut) {
+        // Quality 1 asks for lossless WebP (Chrome encodes it that way), so
+        // a lossless source isn't made lossy by a crop.
+        const quality = Datum.webpCodec.info(record.bytes).lossless ? 1 : CROP_JPEG_QUALITY;
+        const blob = await Datum.compress.canvasToBlob(canvas, "image/webp", quality);
+        const bytes = Datum.metadataWriter.insertMergedExifWebp(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
+        return { bytes, compressed: false, cropped: true };
+      }
       const blob = await Datum.compress.canvasToJpegBlob(canvas, CROP_JPEG_QUALITY);
       const bytes = Datum.metadataWriter.insertMergedExif(exifObj, fields, new Uint8Array(await blob.arrayBuffer()), strip, size);
-      return { bytes, compressed: false, cropped: true };
+      return { bytes, compressed: false, cropped: true, mime: "image/jpeg" };
     } catch (e) {
       return { bytes: null, compressed: false, failed: true, error: errorMessage(e) };
     }

@@ -23,6 +23,10 @@
   // original name back.
   const EXTENSIONS_FOR_MIME = {
     "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"], "image/heic": [".heic", ".heif"], "image/avif": [".avif"],
+    "image/webp": [".webp"],
+  };
+  const SOURCE_EXTENSIONS = {
+    jpeg: [".jpg", ".jpeg"], png: [".png"], webp: [".webp"], heic: [".heic", ".heif"], avif: [".avif"],
   };
   const IMAGE_EXTENSION = /\.(jpe?g|png|heic|heif|avif|gif|webp|bmp|tiff?)$/i;
 
@@ -32,14 +36,17 @@
   // that was replaced, so the person can be told.
   function resolveNameAndMime(record, result) {
     const typed = record.outputName || record.file.name;
-    const mime = result.compressed ? "image/jpeg" : Datum.model.getOutputMime(record);
+    const mime = result.compressed ? "image/jpeg" : result.mime || Datum.model.getOutputMime(record);
     const exts = EXTENSIONS_FOR_MIME[mime];
     if (!exts || exts.some((e) => typed.toLowerCase().endsWith(e))) return { name: typed, mime, corrected: null };
     const wrong = IMAGE_EXTENSION.exec(typed);
     const base = wrong ? typed.slice(0, wrong.index) : typed;
-    // "Save as HEIC/AVIF" set that ending; when this export needs new pixels
-    // it is a JPEG, which the editor already says, so no toast for it.
-    const expected = record.keepOriginalFormat && /^\.(heic|heif|avif)$/i.test(wrong ? wrong[0] : "");
+    // The source format's own ending, changed because this export is saved
+    // in another format (compressed, cropped where the browser can't write
+    // WebP, or "Save as HEIC/AVIF" with new pixels), needs no toast: the
+    // editor already says so. A wrong ending someone typed does.
+    const own = SOURCE_EXTENSIONS[record.kind] || [];
+    const expected = !!wrong && own.includes(wrong[0].toLowerCase());
     return { name: (base || "photo") + exts[0], mime, corrected: wrong && !expected ? wrong[0] : null };
   }
 

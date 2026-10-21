@@ -113,6 +113,27 @@ def save(img, name, **kwargs):
     return path
 
 
+def webp_fixtures():
+    """WebP, edited in place like PNG: a lossy photo with camera EXIF and an
+    XMP location; a lossless transparent image with no metadata (the simple
+    format, with no extended header); the sideways quadrants tagged
+    "rotate 90 CW", stored lossless so colours are exact; and an animation
+    with EXIF."""
+    save(scene(640, 480, seed=14), "photo-exif.webp", format="WEBP", quality=85,
+         exif=camera_exif().tobytes(), xmp=XMP_GPS.encode("utf-8"))
+    see_through = quadrants(200, 150).convert("RGBA")
+    ImageDraw.Draw(see_through).rectangle([0, 0, 19, 149], fill=(0, 0, 0, 0))
+    save(see_through, "transparent.webp", format="WEBP", lossless=True)
+    e6 = camera_exif()
+    e6[0x0112] = 6
+    save(quadrants().transpose(Image.Transpose.ROTATE_90), "photo-orient6.webp", format="WEBP",
+         lossless=True, exif=e6.tobytes())
+    frames = [quadrants(120, 80).rotate(180 * i).convert("RGBA") for i in range(3)]
+    frames[0].save(os.path.join(HERE, "animated.webp"), format="WEBP", save_all=True, append_images=frames[1:],
+                   duration=200, loop=0, lossless=True, exif=camera_exif().tobytes())
+    print("wrote animated.webp")
+
+
 def main():
     # Input formats the app edits (JPEG, PNG, HEIC/HEIF).
     big = scene(1200, 900, seed=1)
@@ -127,11 +148,12 @@ def main():
          exif=camera_exif().tobytes())
     save(scene(320, 240, seed=5), "photo-noexif.heif", format="HEIF", quality=85)
 
-    # Formats the app only shows (view-only, passed through unchanged).
+    # Formats the app only shows (view-only, passed through unchanged), and
+    # a plain WebP.
     small = scene(160, 120, seed=6)
     save(small, "sample.gif", format="GIF")
     save(small, "sample.bmp", format="BMP")
-    save(small, "sample.webp", format="WEBP", quality=90)
+    save(small, "sample.webp", format="WEBP", quality=90)  # plain lossy WebP, no metadata
     save(small, "sample.tiff", format="TIFF")
     save(small, "sample.avif", format="AVIF", quality=60)
 
@@ -231,6 +253,8 @@ def main():
     with open(os.path.join(HERE, "archive.zip"), "wb") as f:
         f.write(buf.getvalue())
     print("wrote archive.zip")
+
+    webp_fixtures()
 
     with open(os.path.join(HERE, "corrupt.zip"), "wb") as f:
         f.write(b"this is not a zip file" * 20)

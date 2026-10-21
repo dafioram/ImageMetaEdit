@@ -94,10 +94,10 @@ appTest("Download compressed saves a JPEG even when the source is a PNG", async 
 });
 
 appTest("Download of a view-only file saves the original bytes", async (s) => {
-  await addFixtures(s, ["sample.webp"]);
+  await addFixtures(s, ["sample.bmp"]);
   const { name, bytes } = await downloadFrom(s.page, s.page.getByRole("button", { name: "Download file", exact: true }));
-  assert.equal(name, "sample.webp");
-  assert.ok(bytes.equals(readFileSync(fixture("sample.webp"))));
+  assert.equal(name, "sample.bmp");
+  assert.ok(bytes.equals(readFileSync(fixture("sample.bmp"))));
 });
 
 appTest("a PNG saved with a .jpg name downloads as a PNG with its image unchanged", async (s) => {

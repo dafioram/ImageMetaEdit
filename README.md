@@ -51,6 +51,7 @@ until they are fixed.
 |---|---|
 | JPEG | Full read/write. Only the EXIF segment is touched — pixel data is never re-encoded, so there's no quality loss. |
 | PNG | Full read/write via the `eXIf` chunk (part of the PNG spec since 2017). Same no-recompression guarantee. |
+| WebP | Full read/write via the `EXIF` and `XMP ` chunks, lossy, lossless and animated alike. Same no-recompression guarantee: the image data is copied byte for byte. |
 | HEIC/HEIF | Read + preview natively. Saved as JPEG by default (see below) — you'll see an explicit notice before this happens. "Save as: HEIC" keeps the original file and writes only the metadata, when the file allows it. |
 | AVIF | Read + preview through the browser's own decoder. Saved as JPEG by default, like HEIC, or kept as AVIF with "Save as: AVIF". Without an AVIF decoder (some older browsers) the file is kept as is. |
 | Anything else | Basic file info only (name, size, dimensions). Passed through unchanged on download. |
@@ -95,7 +96,7 @@ limit), with an optional max-dimension cap. It binary-searches JPEG quality to f
 the highest quality that still fits your target — typically 5-8 encode
 passes, all client-side. Files already under the target are left
 completely untouched, not needlessly re-encoded. The output is always
-JPEG regardless of source format (PNG/HEIC included), since that's the
+JPEG regardless of source format (PNG/WebP/HEIC included), since that's the
 only format here with a reliable native browser encode path — see
 "Design notes" below for why WebP/AVIF aren't included. Compressing still
 carries your metadata: it loads the original file's full EXIF, merges
@@ -109,7 +110,9 @@ box; Escape cancels). The editor, queue and viewer show the cropped
 picture, and Reset changes or Remove crop bring the full image back.
 Cropping re-encodes the image when it's downloaded: JPEG at high quality
 (HEIC and AVIF too, which are saved as JPEG), PNG without loss and with its
-transparency. EXIF metadata is kept, the pixels are stored upright, and the
+transparency, and WebP as WebP where the browser can write it (Chrome,
+Edge, Firefox; a lossless WebP stays lossless in Chrome) or as JPEG where it
+can't (Safari). An animated WebP or PNG keeps only its first frame. EXIF metadata is kept, the pixels are stored upright, and the
 embedded EXIF thumbnail is removed, since it would still show the uncropped
 picture. With "Reduce file size" on, the crop is compressed to the target
 in the same pass.
@@ -123,6 +126,18 @@ once, when you close the viewer, so browsing quickly through a batch
 doesn't repeatedly rebuild the editor panel.
 
 ## Design notes and known limitations
+
+**How WebP is edited in place.** A WebP file is a RIFF list of chunks,
+and only the header's total size refers to anything else, so the `EXIF`
+and `XMP ` chunks can be replaced without touching the image data. A
+plain WebP (a lone `VP8 ` or `VP8L` chunk) has no room for metadata until
+it gets the extended header (`VP8X`), which the app adds with the canvas
+size and transparency read from the image data's own header. The bundled
+exifr has no WebP reader, so WebP EXIF is read with piexif, as for HEIC.
+An `EXIF` chunk that starts with "Exif\0\0", which some writers add, is
+read as well. Whether the browser applies a WebP's EXIF orientation is
+measured once with a tiny rotated WebP, so a rotated photo is never turned
+twice.
 
 **Why HEIC converts to JPEG by default.** JPEG's EXIF
 lives in one self-contained segment — swap it out, update one length
