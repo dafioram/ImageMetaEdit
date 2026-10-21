@@ -80,13 +80,24 @@
 
   // Whether this browser applies a file's EXIF orientation when decoding it
   // as an image, per format. Every current browser does for JPEG; PNG eXIf
-  // support varies. Measured once with a 2x1 image tagged "rotate 90".
+  // and WebP support varies. Measured once with a 2x1 image tagged
+  // "rotate 90".
+  // 2x1 lossless WebP with EXIF orientation 6, made with Pillow. Browsers
+  // can't all encode WebP, so it can't be made on the fly like the others.
+  const WEBP_PROBE = "UklGRk4AAABXRUJQVlA4WAoAAAAIAAAAAQAAAAAAVlA4TA4AAAAvAQAAAAcQEf0PRET/A0VYSUYaAAAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAA=";
   const appliesCache = {};
   function browserAppliesOrientation(kind) {
-    if (kind !== "jpeg" && kind !== "png") return Promise.resolve(false);
+    if (kind !== "jpeg" && kind !== "png" && kind !== "webp") return Promise.resolve(false);
     if (!appliesCache[kind]) {
       appliesCache[kind] = (async () => {
         try {
+          if (kind === "webp") {
+            const bytes = Datum.bin.binaryStringToUint8(atob(WEBP_PROBE));
+            const bmp = await createImageBitmap(new Blob([bytes], { type: "image/webp" }));
+            const applied = bmp.width === 1;
+            bmp.close();
+            return applied;
+          }
           const c = document.createElement("canvas");
           c.width = 2; c.height = 1;
           c.getContext("2d").fillRect(0, 0, 2, 1);

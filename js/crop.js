@@ -116,7 +116,8 @@
     }
     panel.appendChild(controls);
     panel.appendChild(el("p", "crop-note",
-      "Cropping re-encodes the image: JPEG at high quality (photos converted from HEIC or AVIF too), PNG without loss. " +
+      "Cropping re-encodes the image: JPEG at high quality (photos converted from HEIC or AVIF too), PNG without loss, " +
+      "WebP as WebP where the browser can write it (lossless stays lossless) and otherwise as JPEG. " +
       "EXIF metadata is kept; the embedded thumbnail, which would still show the uncropped picture, is removed."));
 
     const actions = el("div", "crop-actions");
@@ -255,7 +256,7 @@
         c.width = Math.max(1, Math.round(r.width * k));
         c.height = Math.max(1, Math.round(r.height * k));
         c.getContext("2d").drawImage(img, r.x * f, r.y * f, r.width * f, r.height * f, 0, 0, c.width, c.height);
-        const type = record.kind === "png" ? "image/png" : "image/jpeg";
+        const type = record.kind === "png" || record.hasAlpha ? "image/png" : "image/jpeg";
         const blob = await new Promise((res) => c.toBlob(res, type, 0.9));
         previewUrl = blob ? URL.createObjectURL(blob) : null;
       }

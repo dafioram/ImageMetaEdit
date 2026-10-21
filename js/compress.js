@@ -95,5 +95,19 @@
     return { blob: smallest.blob, quality: smallest.quality, reachedTarget: false };
   }
 
-  Datum.compress = { loadImageFromBytes, drawToCanvas, canvasToBlob, canvasToJpegBlob, compressToTargetSize };
+  // Whether this browser's canvas can encode `mime`. Ones that can't
+  // (Safari, for WebP) quietly return a PNG instead.
+  const encodable = {};
+  function canEncode(mime) {
+    if (!encodable[mime]) {
+      encodable[mime] = new Promise((resolve) => {
+        const c = document.createElement("canvas");
+        c.width = c.height = 1;
+        c.toBlob((blob) => resolve(!!blob && blob.type === mime), mime);
+      });
+    }
+    return encodable[mime];
+  }
+
+  Datum.compress = { loadImageFromBytes, drawToCanvas, canvasToBlob, canvasToJpegBlob, compressToTargetSize, canEncode };
 })(window.Datum = window.Datum || {});

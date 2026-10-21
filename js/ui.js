@@ -96,7 +96,7 @@
       "<p>See its metadata, edit GPS and camera details, then download \u2014 nothing leaves your browser.</p>" +
       '<label class="btn btn-primary" for="file-input">Choose files</label>' +
       '<input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif,image/avif,.avif,image/gif,image/webp,image/bmp,image/tiff,.tif,.tiff,.zip,application/zip" multiple />' +
-      '<div class="formats-line">JPEG &amp; PNG: full editing &middot; HEIC &amp; AVIF: preview + convert to edit &middot; GIF, WebP, BMP, TIFF: view only &middot; .zip: unpacked automatically</div>' +
+      '<div class="formats-line">JPEG, PNG &amp; WebP: full editing &middot; HEIC &amp; AVIF: preview + convert to edit &middot; GIF, BMP, TIFF: view only &middot; .zip: unpacked automatically</div>' +
       "</div>"
     );
   }
